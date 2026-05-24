@@ -1,0 +1,23 @@
+{
+  "name": "pi-planit",
+  "version": "0.1.0",
+  "description": "Headless plan mode for Pi — file-based planning with TUI approval",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.75.0",
+    "@earendil-works/pi-ai": "^0.75.0",
+    "@earendil-works/pi-tui": "^0.75.0",
+    "typebox": "^1.1.0",
+    "typescript": "latest"
+  }
+}
