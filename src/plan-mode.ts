@@ -433,18 +433,6 @@ ${planContent}
       default: false,
     });
 
-    // Shortcut
-    pi.registerShortcut("ctrl+alt+p", {
-      description: "Toggle plan mode",
-      handler: async (ctx: ExtensionContext) => {
-        if (this.isPlanMode) {
-          this.exitPlanning(ctx);
-        } else {
-          this.enterPlanning(ctx);
-        }
-      },
-    });
-
     // Event handlers
     pi.on("tool_call", (event, ctx) => {
       (this.ui as any).setContext(ctx);

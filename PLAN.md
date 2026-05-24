@@ -41,7 +41,7 @@
 - `pi.registerTool()` — custom LLM-callable tool ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
 - `pi.registerCommand()` — register `/cmd` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
 - `pi.registerFlag()` — CLI flags like `--plan` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
-- `pi.registerShortcut()` — keyboard shortcuts like `Ctrl+Alt+P` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
+- `pi.registerShortcut()` — keyboard shortcuts ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
 - `pi.appendEntry()` — session persistence ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md))
 - `pi.sendUserMessage()` — inject messages from extensions ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#input-events))
 - `ctx.ui.select()`, `ctx.ui.confirm()`, `ctx.ui.input()`, `ctx.ui.notify()` — TUI interaction ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#extensioncontext))
@@ -547,18 +547,6 @@ ${planContent}
       description: "Start in plan mode",
       type: "boolean",
       default: false,
-    });
-
-    // Shortcut
-    pi.registerShortcut("ctrl+alt+p", {
-      description: "Toggle plan mode",
-      handler: async (ctx: ExtensionContext) => {
-        if (this.isPlanMode) {
-          this.exitPlanning(ctx);
-        } else {
-          this.enterPlanning(ctx);
-        }
-      },
     });
 
     // Event handlers
@@ -1503,7 +1491,6 @@ onToolCall(event: any, ctx: ExtensionContext): { block: true; reason: string } |
 
 - [ ] `/planit` toggles plan mode (enter/exit planning), blocks configured write tools
 - [ ] `--plan` flag starts in plan mode
-- [ ] `Ctrl+Alt+P` toggles plan mode
 - [ ] Configurable tools: adding MCP tool name to config allows it in plan mode
 - [ ] Configurable tools: default blocked list blocks `edit`/`write`/`ast_rewrite`
 - [ ] Bash whitelist blocks `rm`, `git commit`, `npm install`, etc.
@@ -1537,6 +1524,31 @@ onToolCall(event: any, ctx: ExtensionContext): { block: true; reason: string } |
 4. **Plan file path resolution** — Use `ctx.cwd` relative paths, resolve with `path.resolve()`.
 5. **Concurrent tool calls** — In parallel mode, `tool_call` may not see sibling results. Plan gating doesn't depend on this.
 6. **Non-UI modes** — Always check `ctx.hasUI` before calling `ctx.ui.*` methods.
+
+---
+
+## Implementation Status
+
+**Source files implemented:** `src/` (960 lines total)
+
+| File | Status |
+|------|--------|
+| `index.ts` | ✅ Entry point |
+| `types.ts` | ✅ Shared types |
+| `bash-filter.ts` | ✅ Bash whitelist/denylist |
+| `plan-file.ts` | ✅ Plan file I/O, checklist parsing |
+| `ui.ts` | ✅ TUI menus, status, widgets |
+| `plan-mode.ts` | ✅ Core state machine, tool gating, event hooks, `write_plan` tool |
+
+**Phases completed in source:**
+- ✅ **Phase 1** — Skeleton, config, tool gating (`/planit on/off/toggle`, `--planit` flag, blocked tools, bash filtering)
+- ✅ **Phase 2** — Plan file management (`write_plan` tool, checklist parsing, gitignore)
+- ✅ **Phase 3** — Review flow (`/planit review` → menu → build auto/guided/continue editing)
+- ✅ **Phase 4** — Bash filtering (SAFE/DANGEROUS pattern lists)
+- ❌ **Phase 5** — Execution commands (`/planit resume`, `/planit status`, `/planit cancel`, `/planit-file`) — not yet implemented
+- ❌ **Phase 6** — Session persistence (`restoreState` reads session file, `persistState` via `appendEntry`) — stub only
+- ❌ **Phase 7** — Polish & manual QA
+- ❌ **Phase 8** — Delete plans — not yet implemented
 
 ---
 
@@ -1602,6 +1614,107 @@ Things worth investigating in future iterations — not for the current MVP:
 
 ---
 
+## Phase 8: Delete Plans (0.5–1 hour)
+
+**Goal:** User can delete plan files via `/planit delete`.
+
+### 8.1 Delete Command (`src/plan-mode.ts`)
+
+Add to `PlanMode.register()` under the existing `planit` command handler:
+
+```typescript
+if (raw === "delete") {
+  await this.deletePlan(ctx);
+  return;
+}
+
+// If plan mode is off and a task is provided, enable it first
+```
+
+And the handler method:
+
+```typescript
+private async deletePlan(ctx: ExtensionContext): Promise<void> {
+  if (!this.planFile.getFilePath()) {
+    this.ui.notify("No active plan to delete.");
+    return;
+  }
+
+  if (this.isPlanMode || this.isExecuting) {
+    this.ui.notify("Cannot delete while plan mode is active. Exit plan mode first.");
+    return;
+  }
+
+  if (!this.pi.getContext()?.hasUI) {
+    // Non-UI mode: delete without confirmation
+    fs.unlinkSync(this.planFile.getFilePath());
+    this.ui.notify(`Plan deleted: ${this.planFile.getFilePath()}`);
+    this.planFile = new PlanFile(); // Reset to fresh state
+    return;
+  }
+
+  const ctx2 = this.pi.getContext()!;
+  const confirmed = await ctx2.ui.confirm(
+    "Delete plan?",
+    "This will permanently remove the plan file and cannot be undone.",
+  );
+
+  if (!confirmed) {
+    this.ui.notify("Deletion cancelled.");
+    return;
+  }
+
+  fs.unlinkSync(this.planFile.getFilePath());
+  this.ui.notify(`Plan deleted: ${this.planFile.getFilePath()}`);
+  this.planFile = new PlanFile(); // Reset to fresh state
+}
+```
+
+**Reference:**
+- `ctx.ui.confirm()` for confirmation dialog ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#custom-ui))
+- `fs.unlinkSync()` for file deletion
+
+### 8.2 Delete by Name (Deferred)
+
+Allow deleting a specific plan by name or listing all plans in a project:
+
+```typescript
+pi.registerCommand("planit-list", {
+  description: "List all plan files for this project",
+  handler: async (_args: string, ctx: ExtensionContext) => {
+    const plansDir = path.join(
+      process.env.HOME ?? "/",
+      ".pi", "agent", "plans",
+      cwd.replace(/\//g, "--"),
+    );
+    const files = fs.existsSync(plansDir)
+      ? fs.readdirSync(plansDir).filter(f => f.endsWith(".md"))
+      : [];
+    if (files.length === 0) {
+      this.ui.notify("No plans found for this project.");
+      return;
+    }
+    const options = files.map(f => ({ label: f }));
+    const selected = await ctx.ui.select("Select plan to delete", options.map(o => o.label));
+    if (!selected) return;
+    fs.unlinkSync(path.join(plansDir, selected));
+    this.ui.notify(`Plan deleted: ${selected}`);
+  },
+});
+```
+
+### 8.7 Testing
+
+**Tier 2 — Integration tests** (`tests/integration/delete-plan.test.ts`):
+- `/planit delete` with no active plan → notifies "No active plan to delete"
+- `/planit delete` while plan mode is active → notifies error, no deletion
+- `/planit delete` with active plan → confirmation dialog → file removed
+- `/planit delete` cancelled → no deletion
+- Non-UI mode → deletes without confirmation
+- Plan file state reset after deletion
+
+---
+
 ## Future Enhancements (Out of Scope)
 
 - **Plan diff** — Show changes when plan is revised (inspired by plannotator)
@@ -1613,3 +1726,5 @@ Things worth investigating in future iterations — not for the current MVP:
 - **Inline plan editing** — Edit plan file from within TUI
 - **Plan validation** — Check plan file for required sections before approval
 - **Plan metrics** — Track how many plans were approved vs. revised vs. discarded
+- **Plan picker** — Browse and select from list of past plans
+- **Plan archive** — Move old plans to archive directory instead of deleting
