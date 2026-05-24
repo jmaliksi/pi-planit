@@ -258,7 +258,12 @@ ${planContent}
 
   // ── Session Lifecycle ──────────────────────────────────────────────
 
-  onSessionStart(_event: unknown): void {
+  onSessionStart(_event: unknown, ctx: ExtensionContext): void {
+    // Auto-enter plan mode if --planit flag was passed
+    if (this.pi.getFlag("planit")) {
+      this.enterPlanning(ctx, "--planit");
+      return;
+    }
     this.restoreState();
   }
 
@@ -453,7 +458,7 @@ ${planContent}
 
     pi.on("session_start", (_event, ctx) => {
       (this.ui as any).setContext(ctx);
-      this.onSessionStart(_event);
+      this.onSessionStart(_event, ctx);
     });
 
     pi.on("session_shutdown", (_event, ctx) => {
