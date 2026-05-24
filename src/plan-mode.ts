@@ -44,6 +44,7 @@ export class PlanMode {
         "fetch_content",
         "get_search_content",
         "code_search",
+        "write_plan",
       ],
       blockedTools: ["edit", "write", "ast_rewrite"],
     };
