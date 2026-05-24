@@ -1591,6 +1591,17 @@ This extension depends on:
 
 ---
 
+## Explore Later
+
+Things worth investigating in future iterations — not for the current MVP:
+
+- **YAML frontmatter** — Replace regex checkbox parsing with YAML frontmatter (`title`, `status`, `steps` array, `completed` count). Pros: structured, queryable, type-safe. Cons: requires YAML parser dep, harder for LLM to produce reliably, adds fragility if parsing fails. Could be a config option to let users choose their preferred format.
+- **Plan file discovery** — Allow user to specify or search for existing plan files. Sub: make the plan directory configurable so users can pick where plans live.
+- **Plan export** — Copy plan content to clipboard, send to chat, or write to arbitrary file path.
+- **Plan versioning** — Track plan revisions over time.
+
+---
+
 ## Future Enhancements (Out of Scope)
 
 - **Plan diff** — Show changes when plan is revised (inspired by plannotator)

@@ -1,5 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { PlanMode } from "./plan-mode";
 
-export default function (_pi: ExtensionAPI): void {
-  console.log("Hello from pi-planit");
+export default function (pi: ExtensionAPI): void {
+  const planMode = new PlanMode(pi);
+  planMode.register(pi);
 }
