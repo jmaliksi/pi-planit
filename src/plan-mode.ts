@@ -300,7 +300,7 @@ ${planContent}
       this.enterPlanning(ctx, "--planit");
       return;
     }
-    this.restoreState();
+    this.restoreState(ctx);
   }
 
   onSessionShutdown(_event: unknown): void {
@@ -348,10 +348,64 @@ ${planContent}
     });
   }
 
-  private restoreState(): void {
-    // In a full implementation, read the last "planit" entry from the
-    // session. For now this is a stub — the plan file on disk is the
-    // source of truth.
+  private restoreState(ctx: ExtensionContext): void {
+    try {
+      const entries = ctx.sessionManager.getBranch();
+      let lastEntry: { data: any } | undefined;
+
+      for (const entry of entries) {
+        if (entry.type === "custom" && entry.customType === "planit") {
+          lastEntry = entry as any;
+        }
+      }
+
+      if (!lastEntry) return;
+
+      const data = lastEntry.data;
+      if (!data?.phase || data.phase === "idle") return;
+
+      // Reconstruct plan file from persisted content
+      if (data.planContent && data.planFilePath) {
+        fs.writeFileSync(data.planFilePath, data.planContent, "utf-8");
+        this.planFile.filePath = data.planFilePath;
+        this.planFile.content = data.planContent;
+        this.planFile.parseChecklist();
+      } else if (data.planFilePath && fs.existsSync(data.planFilePath)) {
+        this.planFile.load(data.planFilePath);
+      } else {
+        return; // No plan file to restore
+      }
+
+      // Restore captured tools
+      this.restoredTools = data.restoredTools ?? null;
+
+      if (data.phase === "planning") {
+        const readOnlyTools = this.getReadOnlyTools();
+        if (readOnlyTools.length > 0) {
+          this.pi.setActiveTools(readOnlyTools);
+        }
+        this.phase = "planning";
+        this.ui.setStatus("⏸ plan (restored)");
+        this.ui.showPlanningWidget(
+          this.planFile.getFilePath(),
+          this.planFile.getTitle(),
+          this.planFile.getWidgetLines(),
+        );
+        this.ui.notify("Plan mode restored from session.");
+      } else if (data.phase === "executing") {
+        if (this.restoredTools && this.restoredTools.length > 0) {
+          this.pi.setActiveTools(this.restoredTools);
+        }
+        this.phase = "executing";
+        const completed = this.planFile.getCompletedSteps();
+        const total = this.planFile.getTotalSteps();
+        this.ui.setStatus(`📋 ${completed}/${total}`);
+        this.ui.setWidget(this.planFile.getWidgetLines());
+        this.ui.notify("Plan execution restored from session.");
+      }
+    } catch (err) {
+      console.error(`Planit: Failed to restore state: ${err}`);
+    }
   }
 
   // ── Review Flow ────────────────────────────────────────────────────
@@ -646,6 +700,11 @@ ${planContent}
     pi.on("session_shutdown", (_event, ctx) => {
       (this.ui as any).setContext(ctx);
       this.onSessionShutdown(_event);
+    });
+
+    pi.on("session_tree", (_event, ctx) => {
+      (this.ui as any).setContext(ctx);
+      this.restoreState(ctx);
     });
 
     pi.on("turn_end", (event, ctx) => {

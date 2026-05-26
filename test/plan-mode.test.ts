@@ -309,6 +309,281 @@ describe("PlanMode — Phase 5: Execution commands", () => {
     });
   });
 
+  describe("restoreState", () => {
+    let mockPI: ReturnType<typeof createMockPI>;
+    let backupHome: string | undefined;
+    let tmpHome: string;
+
+    beforeEach(() => {
+      vi.restoreAllMocks();
+      backupHome = process.env.HOME;
+      tmpHome = "/tmp/planit-restore-test-home-" + Date.now();
+      process.env.HOME = tmpHome;
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      if (backupHome !== undefined) {
+        process.env.HOME = backupHome;
+      } else {
+        delete process.env.HOME;
+      }
+      try {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    });
+
+    it("does nothing when no planit entry exists", () => {
+      const fullTools = [{ name: "read" }, { name: "edit" }];
+      mockPI = createMockPI(fullTools);
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+
+      // Create a mock sessionManager with no planit entries
+      (ctx as any).sessionManager = { getBranch: () => [] };
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+      };
+
+      pm.restoreState(ctx);
+
+      expect(pm.isPlanMode).toBe(false);
+      expect(pm.isExecuting).toBe(false);
+    });
+
+    it("does nothing when planit entry has idle phase", () => {
+      const fullTools = [{ name: "read" }, { name: "edit" }];
+      mockPI = createMockPI(fullTools);
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+
+      (ctx as any).sessionManager = {
+        getBranch: () => [
+          { type: "custom", customType: "planit", data: { phase: "idle" } },
+        ],
+      };
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+      };
+
+      pm.restoreState(ctx);
+
+      expect(pm.isPlanMode).toBe(false);
+    });
+
+    it("restores planning mode from a planit entry", () => {
+      const fullTools = [
+        { name: "read" },
+        { name: "edit" },
+        { name: "write" },
+      ];
+      mockPI = createMockPI(fullTools);
+
+      // Create a plan file on disk
+      const projectDir = path.join(
+        tmpHome,
+        ".pi",
+        "agent",
+        "plans",
+        "--tmp--test-project",
+      );
+      fs.mkdirSync(projectDir, { recursive: true });
+      const planPath = path.join(projectDir, "test-plan-2026-01-01T00-00-00.md");
+      const planContent =
+        "# Test Plan\n## Summary\nA test.\n\n## Steps\n- [ ] Step 1\n- [ ] Step 2\n";
+      fs.writeFileSync(planPath, planContent);
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+
+      (ctx as any).sessionManager = {
+        getBranch: () => [
+          {
+            type: "custom",
+            customType: "planit",
+            data: {
+              phase: "planning",
+              planFilePath: planPath,
+              planContent,
+              restoredTools: ["read", "edit", "write"],
+            },
+          },
+        ],
+      };
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        showPlanningWidget: vi.fn(),
+      };
+
+      pm.restoreState(ctx);
+
+      expect(pm.isPlanMode).toBe(true);
+      expect(pm.isExecuting).toBe(false);
+      expect(pm.planFile.getFilePath()).toBe(planPath);
+      expect(pm.planFile.getTotalSteps()).toBe(2);
+    });
+
+    it("restores executing mode from a planit entry", () => {
+      const fullTools = [
+        { name: "read" },
+        { name: "edit" },
+        { name: "write" },
+        { name: "bash" },
+      ];
+      mockPI = createMockPI(fullTools);
+
+      // Create a plan file with one completed step
+      const projectDir = path.join(
+        tmpHome,
+        ".pi",
+        "agent",
+        "plans",
+        "--tmp--test-project",
+      );
+      fs.mkdirSync(projectDir, { recursive: true });
+      const planPath = path.join(projectDir, "exec-plan-2026-01-01T00-00-00.md");
+      const planContent =
+        "# Exec Plan\n## Summary\nExec.\n\n## Steps\n- [x] Step 1\n- [ ] Step 2\n";
+      fs.writeFileSync(planPath, planContent);
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+
+      (ctx as any).sessionManager = {
+        getBranch: () => [
+          {
+            type: "custom",
+            customType: "planit",
+            data: {
+              phase: "executing",
+              planFilePath: planPath,
+              planContent,
+              restoredTools: ["read", "edit", "write", "bash"],
+            },
+          },
+        ],
+      };
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        showPlanningWidget: vi.fn(),
+      };
+
+      pm.restoreState(ctx);
+
+      expect(pm.isExecuting).toBe(true);
+      expect(pm.isPlanMode).toBe(false);
+      expect(pm.planFile.getCompletedSteps()).toBe(1);
+      expect(pm.planFile.getTotalSteps()).toBe(2);
+    });
+
+    it("falls back to loading plan file from disk when content is missing", () => {
+      const fullTools = [{ name: "read" }];
+      mockPI = createMockPI(fullTools);
+
+      const projectDir = path.join(
+        tmpHome,
+        ".pi",
+        "agent",
+        "plans",
+        "--tmp--test-project",
+      );
+      fs.mkdirSync(projectDir, { recursive: true });
+      const planPath = path.join(projectDir, "fallback-plan-2026-01-01T00-00-00.md");
+      fs.writeFileSync(
+        planPath,
+        "# Fallback\n## Summary\n\n## Steps\n- [ ] Fallback step\n",
+      );
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+
+      (ctx as any).sessionManager = {
+        getBranch: () => [
+          {
+            type: "custom",
+            customType: "planit",
+            data: {
+              phase: "planning",
+              planFilePath: planPath,
+              // No planContent — should fall back to loading from disk
+              restoredTools: ["read"],
+            },
+          },
+        ],
+      };
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        showPlanningWidget: vi.fn(),
+      };
+
+      pm.restoreState(ctx);
+
+      expect(pm.isPlanMode).toBe(true);
+      expect(pm.planFile.getTotalSteps()).toBe(1);
+    });
+  });
+
+  describe("session_tree", () => {
+    it("reconstructs state on tree navigation", () => {
+      const fullTools = [{ name: "read" }, { name: "edit" }];
+      const mockPI = createMockPI(fullTools);
+
+      const projectDir = path.join(
+        process.env.HOME!,
+        ".pi",
+        "agent",
+        "plans",
+        "--tmp--test-project",
+      );
+      fs.mkdirSync(projectDir, { recursive: true });
+      const planPath = path.join(projectDir, "tree-plan-2026-01-01T00-00-00.md");
+      const planContent =
+        "# Tree Plan\n## Summary\n\n## Steps\n- [ ] Tree step\n";
+      fs.writeFileSync(planPath, planContent);
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+
+      // Simulate tree navigation that restores planning
+      (ctx as any).sessionManager = {
+        getBranch: () => [
+          {
+            type: "custom",
+            customType: "planit",
+            data: {
+              phase: "planning",
+              planFilePath: planPath,
+              planContent,
+              restoredTools: ["read"],
+            },
+          },
+        ],
+      };
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        showPlanningWidget: vi.fn(),
+      };
+
+      pm.restoreState(ctx);
+
+      expect(pm.isPlanMode).toBe(true);
+    });
+  });
+
   describe("PlanFile.listPlans", () => {
     it("returns empty array when no plans exist", () => {
       const plans = (PlanFile as any).listPlans("/tmp/nonexistent-project");
