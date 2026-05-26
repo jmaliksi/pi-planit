@@ -137,6 +137,46 @@ export class PlanFile {
     this.items = newItems;
   }
 
+  /**
+   * List all plan files for a given project directory.
+   * Returns sorted array of { filename, filePath, modified } objects.
+   */
+  static listPlans(cwd: string): { filename: string; filePath: string; modified: Date }[] {
+    const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "/";
+    const plansDir = path.join(homeDir, ".pi", "agent", "plans");
+    const sanitizedProjectPath = cwd.replace(/\//g, "--");
+    const projectPlansDir = path.join(plansDir, sanitizedProjectPath);
+
+    if (!fs.existsSync(projectPlansDir)) {
+      return [];
+    }
+
+    const files = fs.readdirSync(projectPlansDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((filename) => {
+        const filePath = path.join(projectPlansDir, filename);
+        const stat = fs.statSync(filePath);
+        return { filename, filePath, modified: stat.mtime };
+      });
+
+    // Sort by modified time, newest first
+    return files.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+  }
+
+  /**
+   * Load an existing plan file from disk into this instance.
+   */
+  load(filePath: string): void {
+    this.filePath = filePath;
+    if (fs.existsSync(filePath)) {
+      this.content = fs.readFileSync(filePath, "utf-8");
+      this.parseChecklist();
+    } else {
+      this.content = "";
+      this.items = [];
+    }
+  }
+
   private updateFile(): void {
     const lines = this.content.split("\n");
     for (let i = 0; i < lines.length; i++) {

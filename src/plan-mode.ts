@@ -191,6 +191,11 @@ export class PlanMode {
     this.phase = "planning";
     this.planFile.init(ctx.cwd, userSummary);
     this.ui.setStatus("⏸ plan");
+    this.ui.showPlanningWidget(
+      this.planFile.getFilePath(),
+      this.planFile.getTitle(),
+      this.planFile.getWidgetLines(),
+    );
     this.ui.notify("Plan mode enabled (read-only).");
     this.persistState(ctx);
   }
@@ -408,11 +413,133 @@ ${planContent}
 
   private continueEditing(ctx: ExtensionContext): void {
     this.phase = "planning";
+
+    // Restore read-only tools
+    const readOnlyTools = this.getReadOnlyTools();
+    if (readOnlyTools.length > 0) {
+      this.pi.setActiveTools(readOnlyTools);
+    }
+
     this.ui.setStatus("⏸ plan");
+    this.ui.showPlanningWidget(
+      this.planFile.getFilePath(),
+      this.planFile.getTitle(),
+      this.planFile.getWidgetLines(),
+    );
     this.ui.notify(
       "Back to planning. Edit the plan and ask the agent to explore further.",
     );
     this.persistState(ctx);
+  }
+
+  // ── Plan Execution Commands ────────────────────────────────────────
+
+  /**
+   * Show a plan picker menu and load the selected plan into planning mode.
+   */
+  private async resumePlan(ctx: ExtensionContext): Promise<void> {
+    const plans = PlanFile.listPlans(ctx.cwd);
+
+    if (plans.length === 0) {
+      this.ui.notify("No plans found for this project.");
+      return;
+    }
+
+    const uiCtx = this.getUiContext(ctx);
+
+    // If no UI, load the most recent plan
+    if (!uiCtx.hasUI) {
+      const latest = plans[0];
+      this.planFile.load(latest.filePath);
+      const readOnlyTools = this.getReadOnlyTools();
+      if (readOnlyTools.length > 0) {
+        this.pi.setActiveTools(readOnlyTools);
+      }
+      this.phase = "planning";
+      this.ui.setStatus("⏸ plan (restored)");
+      this.ui.showPlanningWidget(
+        this.planFile.getFilePath(),
+        this.planFile.getTitle(),
+        this.planFile.getWidgetLines(),
+      );
+      this.ui.notify(`Plan restored: ${plans[0].filename}`);
+      this.persistState(ctx);
+      return;
+    }
+
+    // Show picker menu with plan filenames
+    const options = plans.map((p) => {
+      const readable = p.filename.replace(/\.md$/, "");
+      // Strip timestamp for readability (format: name-YYYY-MM-DDTHH-mm-ss)
+      const parts = readable.split(/-\d{4}-\d{2}-\d{2}T/);
+      const displayName = parts.length > 1 ? parts[0] : readable;
+      return `${displayName} (${new Date(p.modified).toLocaleString()})`;
+    });
+
+    const selected = await uiCtx.ui.select("Select plan to resume", options);
+    if (!selected) return;
+
+    const selectedIndex = options.indexOf(selected);
+    const selectedPlan = plans[selectedIndex];
+
+    // Exit any current mode first
+    if (this.isPlanMode) {
+      this.exitPlanning(ctx);
+    } else if (this.isExecuting) {
+      this.phase = "idle";
+      if (this.restoredTools && this.restoredTools.length > 0) {
+        this.pi.setActiveTools(this.restoredTools);
+      }
+      this.restoredTools = null;
+      this.ui.setStatus(undefined);
+      this.ui.notify("Execution cancelled.");
+    }
+
+    // Load the selected plan
+    this.planFile.load(selectedPlan.filePath);
+
+    // Enter planning mode with the loaded plan
+    const readOnlyTools = this.getReadOnlyTools();
+    if (readOnlyTools.length > 0) {
+      this.pi.setActiveTools(readOnlyTools);
+    }
+    this.phase = "planning";
+    this.ui.setStatus("⏸ plan");
+    this.ui.showPlanningWidget(
+      this.planFile.getFilePath(),
+      this.planFile.getTitle(),
+      this.planFile.getWidgetLines(),
+    );
+    this.ui.notify(`Plan restored: ${selectedPlan.filename}`);
+    this.persistState(ctx);
+  }
+
+  /**
+   * Cancel current execution or planning and return to the appropriate state.
+   */
+  private cancelPlan(ctx: ExtensionContext): void {
+    if (this.isExecuting) {
+      // Return to planning: restore read-only tools
+      this.phase = "planning";
+      const readOnlyTools = this.getReadOnlyTools();
+      if (readOnlyTools.length > 0) {
+        this.pi.setActiveTools(readOnlyTools);
+      }
+      this.ui.setStatus("⏸ plan");
+      this.ui.showPlanningWidget(
+        this.planFile.getFilePath(),
+        this.planFile.getTitle(),
+        this.planFile.getWidgetLines(),
+      );
+      this.ui.notify("Execution cancelled. Back to planning.");
+      this.persistState(ctx);
+    } else if (this.isPlanMode) {
+      // Exit planning: same as /planit off
+      this.exitPlanning(ctx);
+    } else {
+      // Idle — nothing to cancel
+      this.ui.notify("Nothing to cancel.");
+    }
   }
 
   // ── Registration ───────────────────────────────────────────────────
@@ -421,12 +548,15 @@ ${planContent}
     // Commands
     pi.registerCommand("planit", {
       description:
-        "Toggle plan mode. Usage: /planit, /planit on, /planit off, /planit status, /planit review",
+        "Manage plan mode. Usage: /planit, /planit on, /planit off, /planit resume, /planit cancel, /planit status, /planit review",
       handler: async (args: string, ctx: ExtensionContext) => {
         const raw = args.trim().toLowerCase();
 
         if (raw.length === 0) {
-          if (this.isPlanMode) {
+          // Toggle: idle <-> planning, executing -> planning
+          if (this.isExecuting) {
+            this.cancelPlan(ctx);
+          } else if (this.isPlanMode) {
             this.exitPlanning(ctx);
           } else {
             this.enterPlanning(ctx);
@@ -445,12 +575,33 @@ ${planContent}
         }
 
         if (["status", "state"].includes(raw)) {
-          const state = this.isPlanMode
-            ? "Plan mode: ON (read-only)"
-            : this.isExecuting
-              ? "Plan mode: OFF (executing approved plan)"
-              : "Plan mode: OFF (default YOLO mode)";
-          this.ui.notify(state);
+          // Show status + widget
+          if (this.isPlanMode) {
+            this.ui.notify("Plan mode: ON (read-only)");
+            this.ui.showPlanningWidget(
+              this.planFile.getFilePath(),
+              this.planFile.getTitle(),
+              this.planFile.getWidgetLines(),
+            );
+          } else if (this.isExecuting) {
+            const total = this.planFile.getTotalSteps();
+            const completed = this.planFile.getCompletedSteps();
+            this.ui.notify("Plan mode: executing approved plan");
+            this.ui.setStatus(`\uD83D\uDCCB ${completed}/${total}`);
+            this.ui.setWidget(this.planFile.getWidgetLines());
+          } else {
+            this.ui.notify("Plan mode: OFF (default YOLO mode)");
+          }
+          return;
+        }
+
+        if (raw === "resume") {
+          await this.resumePlan(ctx);
+          return;
+        }
+
+        if (raw === "cancel") {
+          this.cancelPlan(ctx);
           return;
         }
 
@@ -562,6 +713,12 @@ ${planContent}
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
+
+  /** Extract UI context from the current extension context. */
+  private getUiContext(ctx: ExtensionContext) {
+    const c = ctx as any;
+    return c as { hasUI: boolean; ui: { notify: (m: string, t?: string) => void; setStatus: (n: string, s?: string) => void; setWidget: (n: string, l?: string[]) => void; select: (t: string, o: string[]) => Promise<string | undefined>; confirm: (q: string, a: string) => Promise<boolean> } };
+  }
 
   private extractAssistantText(message: unknown): string {
     if (!message || (message as any).role !== "assistant") return "";

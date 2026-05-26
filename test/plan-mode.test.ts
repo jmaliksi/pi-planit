@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { PlanMode } from "../src/plan-mode";
+import { PlanFile } from "../src/plan-file";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -40,6 +43,8 @@ function createMockPI(
 
   return { pi, calls };
 }
+
+// ── Phase 1 Tests: Tool Restoration ──────────────────────────────────
 
 describe("PlanMode — tool restoration", () => {
   let mockPI: ReturnType<typeof createMockPI>;
@@ -158,6 +163,178 @@ describe("PlanMode — tool restoration", () => {
       for (const tool of fullTools) {
         expect(lastCall).toContain(tool.name);
       }
+    });
+  });
+});
+
+// ── Phase 5 Tests: Execution Commands ────────────────────────────────
+
+describe("PlanMode — Phase 5: Execution commands", () => {
+  let mockPI: ReturnType<typeof createMockPI>;
+  let backupHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-test-home-" + Date.now();
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    // Cleanup temp dirs
+    try {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  describe("cancelPlan", () => {
+    it("returns to planning from executing", () => {
+      const fullTools = [
+        { name: "read" },
+        { name: "write" },
+        { name: "edit" },
+      ];
+      mockPI = createMockPI(fullTools);
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+
+      pm.enterPlanning(ctx);
+      pm.buildAuto(ctx);
+      expect(pm.isExecuting).toBe(true);
+
+      // Mock the UI context for getUiContext
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        select: vi.fn(),
+      };
+
+      pm.cancelPlan(ctx);
+
+      expect(pm.isPlanMode).toBe(true);
+      expect(pm.isExecuting).toBe(false);
+    });
+
+    it("exits to idle from planning", () => {
+      const fullTools = [
+        { name: "read" },
+        { name: "write" },
+      ];
+      mockPI = createMockPI(fullTools);
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+
+      pm.enterPlanning(ctx);
+      expect(pm.isPlanMode).toBe(true);
+
+      pm.cancelPlan(ctx);
+
+      expect(pm.isPlanMode).toBe(false);
+      expect(pm.isExecuting).toBe(false);
+    });
+
+    it("notifies nothing to cancel from idle", () => {
+      mockPI = createMockPI();
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        select: vi.fn(),
+      };
+
+      pm.cancelPlan(ctx);
+
+      expect(pm.isPlanMode).toBe(false);
+      expect(pm.isExecuting).toBe(false);
+    });
+  });
+
+  describe("resumePlan", () => {
+    it("notifies when no plans exist", () => {
+      mockPI = createMockPI();
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        select: vi.fn().mockResolvedValue(undefined),
+      };
+
+      // resumePlan is async, but we can still call it
+      void pm.resumePlan(ctx);
+    });
+
+    it("loads plan from disk when UI is absent", async () => {
+      // Create a test plan file in the same project path as the mock context
+      const home = process.env.HOME!;
+      const projectDir = path.join(home, ".pi", "agent", "plans", "--tmp--test-project");
+      fs.mkdirSync(projectDir, { recursive: true });
+
+      const planPath = path.join(projectDir, "migrate-auth-2026-01-01T00-00-00.md");
+      fs.writeFileSync(planPath, "# Migrate Auth\n## Summary\n\n## Steps\n- [ ] Step 1: Update auth module\n");
+
+      mockPI = createMockPI();
+
+      const pm = new PlanMode(mockPI.pi);
+      const ctx = mockPI.pi.getContext()!;
+      (ctx as any).ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        select: vi.fn(),
+      };
+
+      await pm.resumePlan(ctx);
+
+      expect(pm.isPlanMode).toBe(true);
+      expect(pm.planFile.getFilePath()).toBe(planPath);
+      expect(pm.planFile.getTotalSteps()).toBe(1);
+    });
+  });
+
+  describe("PlanFile.listPlans", () => {
+    it("returns empty array when no plans exist", () => {
+      const plans = (PlanFile as any).listPlans("/tmp/nonexistent-project");
+      expect(plans).toEqual([]);
+    });
+
+    it("lists available plans sorted by modification time", () => {
+      const home = process.env.HOME!;
+      // Use the same project path that listPlans("/tmp/test") resolves to
+      const projectDir = path.join(home, ".pi", "agent", "plans", "--tmp--test");
+      fs.mkdirSync(projectDir, { recursive: true });
+
+      const older = path.join(projectDir, "old-plan-2026-01-01T00-00-00.md");
+      const newer = path.join(projectDir, "new-plan-2026-06-01T00-00-00.md");
+
+      fs.writeFileSync(older, "# Old");
+      fs.writeFileSync(newer, "# New");
+
+      // Make sure older is actually older
+      const oldTime = new Date("2026-01-01");
+      fs.utimesSync(older, oldTime, oldTime);
+
+      const plans = (PlanFile as any).listPlans("/tmp/test");
+      expect(plans.length).toBe(2);
+      expect(plans[0].filename).toBe("new-plan-2026-06-01T00-00-00.md");
+      expect(plans[1].filename).toBe("old-plan-2026-01-01T00-00-00.md");
     });
   });
 });

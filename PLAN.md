@@ -1229,127 +1229,65 @@ Tests covered by Phase 1's `BashFilter` unit tests. Phase 4 adds expanded patter
 
 ---
 
-## Phase 5: Plan Execution Commands (1 hour)
+## Phase 5: Plan Execution Commands (~1.5 hours)
 
-**Goal:** Allow manual execution triggers outside the auto-flow.
+**Goal:** Allow manual execution triggers, plan management, and live status outside the review menu flow.
 
-### 5.1 Additional Commands
+### 5.1 Command Behavior
 
-```typescript
-// In PlanMode.register():
+All commands live under the existing `/planit` command handler. No separate `/planit-file` command — the widget already shows the plan checklist + file path.
 
-pi.registerCommand("planit", {
-  description: "Execute plan from file. Usage: /planit, /planit resume, /planit status",
-  handler: async (args: string, ctx: ExtensionContext) => {
-    const raw = args.trim().toLowerCase();
+#### `/planit` (empty — toggle)
 
-    if (raw.length === 0) {
-      // Execute current plan
-      if (!this.planFile.hasSteps()) {
-        this.ui.notify("No plan found. Create a plan in plan mode first.");
-        return;
-      }
+Always toggles plan mode:
+- **Idle** → enter planning (create a new plan file)
+- **Planning** → exit to idle (restore tools)
+- **Executing** → return to planning (cancel execution, restore read-only tools)
 
-      if (this.isExecuting) {
-        this.ui.notify("Already executing a plan.");
-        return;
-      }
+No special "execute current plan" shortcut — execution is always triggered via `/planit review` → build auto/guided.
 
-      this.phase = "executing";
-      this.ui.notify("Executing plan...");
-      this.persistState(ctx);
+#### `/planit resume` — Plan Picker Menu
 
-      const remaining = this.planFile.getRemainingSteps();
-      this.pi.sendUserMessage(
-        `Execute the plan:\n\n${remaining}\n\nInclude [DONE:n] after each step.`,
-        { deliverAs: "followUp" }
-      );
-      return;
-    }
+Pops up a list of previously created plans for the current project, modeled after pi's built-in session resume picker.
 
-    if (["resume", "continue"].includes(raw)) {
-      // Resume from persisted state
-      this.restoreState(ctx);
-      if (this.isExecuting && this.planFile.hasSteps()) {
-        const remaining = this.planFile.getRemainingSteps();
-        this.pi.sendUserMessage(
-          `Resuming plan execution:\n\n${remaining}`,
-          { deliverAs: "followUp" }
-        );
-      }
-      return;
-    }
+**Flow:**
+1. Scan `~/.pi/agent/plans/--project-path--/` for `*.md` files
+2. Show `ctx.ui.select()` menu with plan filenames (strip timestamps for readability)
+3. On selection:
+   - Exit any current plan mode (restore tools)
+   - Load the selected plan file into `PlanFile`
+   - Enter planning mode with the selected plan (read-only tools, plan visible in widget)
+   - User can then `/planit review` to execute it
+4. Non-UI mode fallback: pick the most recent plan and set up state (no picker)
 
-    if (["status", "state", "progress"].includes(raw)) {
-      if (!this.planFile.hasSteps()) {
-        this.ui.notify("No plan tracked.");
-        return;
-      }
+#### `/planit status` — Live Progress + Mode State
 
-      const total = this.planFile.getTotalSteps();
-      const completed = this.planFile.getCompletedSteps();
-      const remaining = total - completed;
+Shows mode state and, when executing, live progress:
+- **Idle:** `Plan mode: OFF (default YOLO mode)`
+- **Planning:** `Plan mode: ON (read-only)` — also renders widget with checklist
+- **Executing:** `📋 completed/total` — renders widget with checklist, live progress updates via `onTurnEnd`
 
-      const status = `Plan: ${completed}/${total} steps (${remaining} remaining)`;
-      this.ui.notify(status);
-      this.ui.setWidget(this.planFile.getWidgetLines());
-      return;
-    }
+#### `/planit cancel` — Cancel and Return to Planning
 
-    if (["cancel", "stop"].includes(raw)) {
-      if (this.isExecuting) {
-        this.phase = "idle";
-        this.ui.notify("Plan execution cancelled.");
-      }
-      return;
-    }
-
-    // If plan mode is off, enable it
-    if (!this.isPlanMode) {
-      this.enterPlanning(ctx);
-    }
-
-    // Treat as task to plan
-    this.pi.sendUserMessage(args, { deliverAs: "followUp" });
-  },
-});
-
-// Add /planit-file to open/view the plan file
-pi.registerCommand("planit-file", {
-  description: "Show the plan file content",
-  handler: async (_args: string, ctx: ExtensionContext) => {
-    const content = this.planFile.getContent();
-    if (!content.trim()) {
-      this.ui.notify("Plan file is empty. Create a plan in plan mode first.");
-      return;
-    }
-    // Use sendMessage to display in TUI
-    this.pi.sendMessage(
-      {
-        customType: "planit-file",
-        content: `### Plan File (${this.planFile.getFilePath()})\n\n\`\`\`\n${content}\n\`\`\``,
-        display: true,
-      },
-      { deliverAs: "followUp" }
-    );
-  },
-});
-```
-
-**Reference:**
-- `pi.sendMessage()` for custom messages ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#extensionapi-methods))
-- `deliverAs: "followUp"` for background messages ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#input-events))
+- **Executing** → exit execution, enter planning (restore read-only tools, show plan in widget). User is back in read-only planning to revise the plan.
+- **Planning** → exit planning (idle, restore full tools). Same as exit.
+- **Idle** → no-op, notify "Nothing to cancel."
 
 ### 5.7 Testing
 
 **Tier 2 — Integration tests** (`tests/integration/planit-commands.test.ts`): pi-test-harness + vitest.
-- `/planit` (empty) with no plan → notifies "No plan found"
-- `/planit` (empty) with existing plan → phase transitions to `executing`, follow-up sent
-- `/planit resume` — restores from persisted state, continues execution
-- `/planit status` — shows step count, renders widget with checklist lines
-- `/planit cancel` — sets phase back to `idle`
-- `/planit-file` with empty plan → notifies "Plan file is empty"
-- `/planit-file` with content → displays plan content in TUI
+- `/planit` (empty) with no plan → enters planning
+- `/planit` (empty) with plan in planning → exits to idle
+- `/planit` (empty) with plan in executing → returns to planning
+- `/planit resume` with no plans → notifies "No plans found"
+- `/planit resume` with plans → shows picker menu → loads selected plan → enters planning
+- `/planit status` in idle → notifies "OFF (YOLO mode)"
+- `/planit status` in planning → notifies "ON (read-only)" + renders widget
+- `/planit status` in executing → shows `📋 n/total` + renders widget
+- `/planit cancel` during execution → returns to planning (read-only tools restored)
+- `/planit cancel` during planning → exits to idle
+- `/planit cancel` during idle → notifies "Nothing to cancel"
+- `/planit-file` does not exist as a command (removed)
 
 ---
 
@@ -1489,7 +1427,7 @@ onToolCall(event: any, ctx: ExtensionContext): { block: true; reason: string } |
 
 ### 7.1 Manual Testing Checklist
 
-- [ ] `/planit` toggles plan mode (enter/exit planning), blocks configured write tools
+- [ ] `/planit` toggles plan mode (idle→planning, planning→idle, executing→planning), blocks configured write tools
 - [ ] `--plan` flag starts in plan mode
 - [ ] Configurable tools: adding MCP tool name to config allows it in plan mode
 - [ ] Configurable tools: default blocked list blocks `edit`/`write`/`ast_rewrite`
@@ -1504,11 +1442,10 @@ onToolCall(event: any, ctx: ExtensionContext): { block: true; reason: string } |
 - [ ] "Build (guided)" → writes enabled, plan as reference
 - [ ] "Continue editing" → back to planning, read-only
 - [ ] `/planit review` with no plan → notifies "No plan to review"
-- [ ] No auto-menu on `agent_end` (review is explicit)
-- [ ] Status shows progress `📋 n/total` during auto build
-- [ ] `/planit` triggers execution manually (legacy compat)
-- [ ] `/planit status` shows progress
-- [ ] `/planit resume` — stub (picker to go through plans deferred to later phase)
+- [ ] No auto-menu on `agent_end` (review is explicit), no `/planit-file` command (widget covers display)
+- [ ] Status shows progress `📋 n/total` during auto build (via `onTurnEnd`)
+- [ ] `/planit status` shows live progress + mode state (`📋 n/total` when executing, read-only banner when planning)
+- [ ] `/planit resume` — plan picker menu (lists previous plans, loads selected into planning)
 - [ ] Session persistence survives restart (plan mode + review + executing)
 - [ ] Works in `-p` (print) mode (auto-approve fallback)
 - [ ] Option text in menus < 80 chars (avoids Issue #4435)
@@ -1529,7 +1466,8 @@ onToolCall(event: any, ctx: ExtensionContext): { block: true; reason: string } |
 
 ## Implementation Status
 
-**Source files implemented:** `src/` (960 lines total)
+**Source files implemented:** `src/` (~1050 lines total)
+**Test files implemented:** `test/` (~450 lines total) — 45 passing tests
 
 | File | Status |
 |------|--------|
@@ -1545,7 +1483,7 @@ onToolCall(event: any, ctx: ExtensionContext): { block: true; reason: string } |
 - ✅ **Phase 2** — Plan file management (`write_plan` tool, checklist parsing, gitignore)
 - ✅ **Phase 3** — Review flow (`/planit review` → menu → build auto/guided/continue editing)
 - ✅ **Phase 4** — Bash filtering (SAFE/DANGEROUS pattern lists)
-- ❌ **Phase 5** — Execution commands (`/planit resume`, `/planit status`, `/planit cancel`, `/planit-file`) — not yet implemented
+- ✅ **Phase 5** — Execution commands (`/planit` toggle semantics for executing, `/planit resume` picker, `/planit status` live progress, `/planit cancel` return-to-planning)
 - ❌ **Phase 6** — Session persistence (`restoreState` reads session file, `persistState` via `appendEntry`) — stub only
 - ❌ **Phase 7** — Polish & manual QA
 - ❌ **Phase 8** — Delete plans — not yet implemented
@@ -1583,7 +1521,7 @@ pi-planit/
 | 2 | Plan file management | 1–2h |
 | 3 | Approval flow | 2–3h |
 | 4 | Bash filtering | 1h |
-| 5 | Execution commands | 1h |
+| 5 | Execution commands | ~1.5h |
 | 6 | Persistence & edge cases | 1–2h |
 | 7 | Polish & manual QA | ~1h |
 
@@ -1608,7 +1546,7 @@ This extension depends on:
 Things worth investigating in future iterations — not for the current MVP:
 
 - **YAML frontmatter** — Replace regex checkbox parsing with YAML frontmatter (`title`, `status`, `steps` array, `completed` count). Pros: structured, queryable, type-safe. Cons: requires YAML parser dep, harder for LLM to produce reliably, adds fragility if parsing fails. Could be a config option to let users choose their preferred format.
-- **Plan file discovery** — Allow user to specify or search for existing plan files. Sub: make the plan directory configurable so users can pick where plans live.
+- **Plan file discovery** — Basic discovery is handled by `/planit resume` (project-scoped picker). Future: configurable plan directory, global search across projects, title-based search instead of filename.
 - **Plan export** — Copy plan content to clipboard, send to chat, or write to arbitrary file path.
 - **Plan versioning** — Track plan revisions over time.
 
@@ -1726,5 +1664,6 @@ pi.registerCommand("planit-list", {
 - **Inline plan editing** — Edit plan file from within TUI
 - **Plan validation** — Check plan file for required sections before approval
 - **Plan metrics** — Track how many plans were approved vs. revised vs. discarded
-- **Plan picker** — Browse and select from list of past plans
 - **Plan archive** — Move old plans to archive directory instead of deleting
+- **Plan chat** - plan starts without any directive to write a file, make that a discrete step.
+- **use PI_AGENT_DIR** - instead of home. also make the directory in general configurable (per project config?)

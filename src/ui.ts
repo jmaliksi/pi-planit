@@ -9,6 +9,7 @@ interface UiContext {
     setStatus: (name: string, status?: string) => void;
     setWidget: (name: string, lines?: string[]) => void;
     select: (title: string, options: string[]) => Promise<string | undefined>;
+    editor: (title: string, prefill?: string) => Promise<string | undefined>;
   };
 }
 
@@ -53,7 +54,7 @@ export class PlanUI {
     this.setWidget(rendered);
   }
 
-  /** Show full plan content + review menu (used during review). */
+  /** Show plan in a scrollable editor, then prompt for review action. */
   async showReviewMenu(
     planContent: string,
     planFilePath: string,
@@ -64,31 +65,32 @@ export class PlanUI {
       return "buildAuto";
     }
 
-    const rendered = [
-      `📋 Plan: ${title ?? "untitled"}`,
-      `   [path: ${planFilePath}]`,
-      "",
-      planContent,
-      "",
-      "── Review Options ──",
-    ];
-    this.setWidget(rendered);
+    const header = `📋 Plan: ${title ?? "untitled"}\n   [path: ${planFilePath}]\n\n`;
 
+    // Show the plan in a proper scrollable editor
+    // Enter = approve, Esc = cancel (continue editing)
+    const result = await this.uiContext.ui.editor("Plan Review", header + planContent);
+    if (result === undefined) {
+      // User pressed Escape — return to planning
+      return "continueEditing";
+    }
+
+    // User pressed Enter — ask which build mode
     const options = [
-      { label: "↺ Build (auto)" },
-      { label: "✓ Build (guided)" },
-      { label: "↻ Continue editing" },
+      "↺ Build (auto)",
+      "✓ Build (guided)",
+      "↻ Continue editing",
     ];
 
-    const result = await this.uiContext.ui.select("Plan Review", options.map((o) => o.label));
-    if (!result) return null;
+    const choice = await this.uiContext.ui.select("Build mode", options);
+    if (!choice) return null;
 
     const actionMap: Record<string, ReviewAction> = {
-      [options[0].label]: "buildAuto",
-      [options[1].label]: "buildGuided",
-      [options[2].label]: "continueEditing",
+      [options[0]]: "buildAuto",
+      [options[1]]: "buildGuided",
+      [options[2]]: "continueEditing",
     };
 
-    return actionMap[result];
+    return actionMap[choice];
   }
 }
