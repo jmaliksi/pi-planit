@@ -3,6 +3,9 @@ import * as path from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ToolCallEvent,
+  BeforeAgentStartEvent,
+  TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import type {
   PlanPhase,
@@ -175,7 +178,7 @@ export class PlanMode {
     userSummary: string = "untitled",
   ): void {
     if (this.phase === "planning") {
-      this.ui.notify("Plan mode is already enabled.");
+      this.ui.notify("Plan mode is already enabled.", "info", ctx.hasUI, ctx.ui);
       return;
     }
 
@@ -183,20 +186,22 @@ export class PlanMode {
 
     const readOnlyTools = this.getReadOnlyTools();
     if (readOnlyTools.length === 0) {
-      this.ui.notify("No read-only tools available.", "error");
+      this.ui.notify("No read-only tools available.", "error", ctx.hasUI, ctx.ui);
       return;
     }
 
     this.pi.setActiveTools(readOnlyTools);
     this.phase = "planning";
     this.planFile.init(ctx.cwd, userSummary);
-    this.ui.setStatus("⏸ plan");
+    this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
     this.ui.showPlanningWidget(
       this.planFile.getFilePath(),
       this.planFile.getTitle(),
       this.planFile.getWidgetLines(),
+      ctx.hasUI,
+      ctx.ui,
     );
-    this.ui.notify("Plan mode enabled (read-only).");
+    this.ui.notify("Plan mode enabled (read-only).", "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
   }
 
@@ -210,15 +215,15 @@ export class PlanMode {
     }
     this.restoredTools = null;
 
-    this.ui.setStatus(undefined);
-    this.ui.notify("Plan mode disabled. Tools restored.");
+    this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
+    this.ui.notify("Plan mode disabled. Tools restored.", "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
   }
 
   // ── Tool Call Gating ───────────────────────────────────────────────
 
   onToolCall(
-    event: { toolName: string; input?: any },
+    event: ToolCallEvent,
   ): { block: true; reason: string } | undefined {
     if (this.phase !== "planning") return undefined;
 
@@ -252,7 +257,7 @@ export class PlanMode {
   // ── System Prompt Injection ────────────────────────────────────────
 
   onBeforeAgentStart(
-    event: { systemPrompt?: string },
+    event: BeforeAgentStartEvent,
   ): { systemPrompt: string } | undefined {
     // Planning phase — inject read-only context on every turn
     if (this.phase === "planning") {
@@ -304,13 +309,12 @@ ${planContent}
   }
 
   onSessionShutdown(_event: unknown): void {
-    this.ui.setStatus(undefined);
-    this.ui.setWidget(undefined);
+    // No-op — UI context not available here (shutdown = no UI)
   }
 
   // ── Progress Tracking ──────────────────────────────────────────────
 
-  onTurnEnd(event: { message?: any }): void {
+  onTurnEnd(event: TurnEndEvent, ctx: ExtensionContext): void {
     if (this.phase !== "executing") return;
 
     const text = this.extractAssistantText(event.message);
@@ -327,13 +331,13 @@ ${planContent}
 
     const total = this.planFile.getTotalSteps();
     const completed = this.planFile.getCompletedSteps();
-    this.ui.setStatus(`📋 ${completed}/${total}`);
-    this.ui.setWidget(this.planFile.getWidgetLines());
+    this.ui.setStatus(`📋 ${completed}/${total}`, ctx.hasUI, ctx.ui);
+    this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
 
     if (completed === total) {
       this.phase = "idle";
-      this.ui.setStatus(undefined);
-      this.ui.notify("All plan steps complete.");
+      this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
+      this.ui.notify("All plan steps complete.", "info", ctx.hasUI, ctx.ui);
     }
   }
 
@@ -385,13 +389,15 @@ ${planContent}
           this.pi.setActiveTools(readOnlyTools);
         }
         this.phase = "planning";
-        this.ui.setStatus("⏸ plan (restored)");
+        this.ui.setStatus("⏸ plan (restored)", ctx.hasUI, ctx.ui);
         this.ui.showPlanningWidget(
           this.planFile.getFilePath(),
           this.planFile.getTitle(),
           this.planFile.getWidgetLines(),
+          ctx.hasUI,
+          ctx.ui,
         );
-        this.ui.notify("Plan mode restored from session.");
+        this.ui.notify("Plan mode restored from session.", "info", ctx.hasUI, ctx.ui);
       } else if (data.phase === "executing") {
         if (this.restoredTools && this.restoredTools.length > 0) {
           this.pi.setActiveTools(this.restoredTools);
@@ -399,9 +405,9 @@ ${planContent}
         this.phase = "executing";
         const completed = this.planFile.getCompletedSteps();
         const total = this.planFile.getTotalSteps();
-        this.ui.setStatus(`📋 ${completed}/${total}`);
-        this.ui.setWidget(this.planFile.getWidgetLines());
-        this.ui.notify("Plan execution restored from session.");
+        this.ui.setStatus(`📋 ${completed}/${total}`, ctx.hasUI, ctx.ui);
+        this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
+        this.ui.notify("Plan execution restored from session.", "info", ctx.hasUI, ctx.ui);
       }
     } catch (err) {
       console.error(`Planit: Failed to restore state: ${err}`);
@@ -412,7 +418,7 @@ ${planContent}
 
   private reviewPlan(ctx: ExtensionContext): void {
     if (!this.planFile.hasSteps()) {
-      this.ui.notify("No plan to review. Ask the agent to write a plan first.");
+      this.ui.notify("No plan to review. Ask the agent to write a plan first.", "info", ctx.hasUI, ctx.ui);
       return;
     }
 
@@ -420,6 +426,8 @@ ${planContent}
       this.planFile.getContent(),
       this.planFile.getFilePath(),
       this.planFile.getTitle(),
+      ctx.hasUI,
+      ctx.ui,
     ).then((result) => {
       if (!result) return;
 
@@ -450,7 +458,7 @@ ${planContent}
       auto: "Building (auto) — executing all steps.",
       guided: "Building (guided) — writes enabled, plan as reference.",
     };
-    this.ui.notify(messages[mode]);
+    this.ui.notify(messages[mode], "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
   }
 
@@ -463,14 +471,19 @@ ${planContent}
       this.pi.setActiveTools(readOnlyTools);
     }
 
-    this.ui.setStatus("⏸ plan");
+    this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
     this.ui.showPlanningWidget(
       this.planFile.getFilePath(),
       this.planFile.getTitle(),
       this.planFile.getWidgetLines(),
+      ctx.hasUI,
+      ctx.ui,
     );
     this.ui.notify(
       "Back to planning. Edit the plan and ask the agent to explore further.",
+      "info",
+      ctx.hasUI,
+      ctx.ui,
     );
     this.persistState(ctx);
   }
@@ -484,14 +497,12 @@ ${planContent}
     const plans = PlanFile.listPlans(ctx.cwd);
 
     if (plans.length === 0) {
-      this.ui.notify("No plans found for this project.");
+      this.ui.notify("No plans found for this project.", "info", ctx.hasUI, ctx.ui);
       return;
     }
 
-    const uiCtx = this.getUiContext(ctx);
-
     // If no UI, load the most recent plan
-    if (!uiCtx.hasUI) {
+    if (!ctx.hasUI) {
       const latest = plans[0];
       this.planFile.load(latest.filePath);
       const readOnlyTools = this.getReadOnlyTools();
@@ -499,13 +510,15 @@ ${planContent}
         this.pi.setActiveTools(readOnlyTools);
       }
       this.phase = "planning";
-      this.ui.setStatus("⏸ plan (restored)");
+      this.ui.setStatus("⏸ plan (restored)", ctx.hasUI, ctx.ui);
       this.ui.showPlanningWidget(
         this.planFile.getFilePath(),
         this.planFile.getTitle(),
         this.planFile.getWidgetLines(),
+        ctx.hasUI,
+        ctx.ui,
       );
-      this.ui.notify(`Plan restored: ${plans[0].filename}`);
+      this.ui.notify(`Plan restored: ${plans[0].filename}`, "info", ctx.hasUI, ctx.ui);
       this.persistState(ctx);
       return;
     }
@@ -519,7 +532,7 @@ ${planContent}
       return `${displayName} (${new Date(p.modified).toLocaleString()})`;
     });
 
-    const selected = await uiCtx.ui.select("Select plan to resume", options);
+    const selected = await ctx.ui.select("Select plan to resume", options);
     if (!selected) return;
 
     const selectedIndex = options.indexOf(selected);
@@ -534,8 +547,8 @@ ${planContent}
         this.pi.setActiveTools(this.restoredTools);
       }
       this.restoredTools = null;
-      this.ui.setStatus(undefined);
-      this.ui.notify("Execution cancelled.");
+      this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
+      this.ui.notify("Execution cancelled.", "info", ctx.hasUI, ctx.ui);
     }
 
     // Load the selected plan
@@ -547,13 +560,15 @@ ${planContent}
       this.pi.setActiveTools(readOnlyTools);
     }
     this.phase = "planning";
-    this.ui.setStatus("⏸ plan");
+    this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
     this.ui.showPlanningWidget(
       this.planFile.getFilePath(),
       this.planFile.getTitle(),
       this.planFile.getWidgetLines(),
+      ctx.hasUI,
+      ctx.ui,
     );
-    this.ui.notify(`Plan restored: ${selectedPlan.filename}`);
+    this.ui.notify(`Plan restored: ${selectedPlan.filename}`, "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
   }
 
@@ -568,20 +583,22 @@ ${planContent}
       if (readOnlyTools.length > 0) {
         this.pi.setActiveTools(readOnlyTools);
       }
-      this.ui.setStatus("⏸ plan");
+      this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
       this.ui.showPlanningWidget(
         this.planFile.getFilePath(),
         this.planFile.getTitle(),
         this.planFile.getWidgetLines(),
+        ctx.hasUI,
+        ctx.ui,
       );
-      this.ui.notify("Execution cancelled. Back to planning.");
+      this.ui.notify("Execution cancelled. Back to planning.", "info", ctx.hasUI, ctx.ui);
       this.persistState(ctx);
     } else if (this.isPlanMode) {
       // Exit planning: same as /planit off
       this.exitPlanning(ctx);
     } else {
       // Idle — nothing to cancel
-      this.ui.notify("Nothing to cancel.");
+      this.ui.notify("Nothing to cancel.", "info", ctx.hasUI, ctx.ui);
     }
   }
 
@@ -620,20 +637,22 @@ ${planContent}
         if (["status", "state"].includes(raw)) {
           // Show status + widget
           if (this.isPlanMode) {
-            this.ui.notify("Plan mode: ON (read-only)");
+            this.ui.notify("Plan mode: ON (read-only)", "info", ctx.hasUI, ctx.ui);
             this.ui.showPlanningWidget(
               this.planFile.getFilePath(),
               this.planFile.getTitle(),
               this.planFile.getWidgetLines(),
+              ctx.hasUI,
+              ctx.ui,
             );
           } else if (this.isExecuting) {
             const total = this.planFile.getTotalSteps();
             const completed = this.planFile.getCompletedSteps();
-            this.ui.notify("Plan mode: executing approved plan");
-            this.ui.setStatus(`\uD83D\uDCCB ${completed}/${total}`);
-            this.ui.setWidget(this.planFile.getWidgetLines());
+            this.ui.notify("Plan mode: executing approved plan", "info", ctx.hasUI, ctx.ui);
+            this.ui.setStatus(`\uD83D\uDCCB ${completed}/${total}`, ctx.hasUI, ctx.ui);
+            this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
           } else {
-            this.ui.notify("Plan mode: OFF (default YOLO mode)");
+            this.ui.notify("Plan mode: OFF (default YOLO mode)", "info", ctx.hasUI, ctx.ui);
           }
           return;
         }
@@ -670,8 +689,7 @@ ${planContent}
     });
 
     // Event handlers
-    pi.on("tool_call", (event, ctx) => {
-      (this.ui as any).setContext(ctx);
+    pi.on("tool_call", (event, _ctx) => {
       const result = this.onToolCall(event);
       if (result) return result;
       return;
@@ -682,23 +700,19 @@ ${planContent}
     });
 
     pi.on("session_start", (_event, ctx) => {
-      (this.ui as any).setContext(ctx);
       this.onSessionStart(_event, ctx);
     });
 
-    pi.on("session_shutdown", (_event, ctx) => {
-      (this.ui as any).setContext(ctx);
+    pi.on("session_shutdown", (_event, _ctx) => {
       this.onSessionShutdown(_event);
     });
 
     pi.on("session_tree", (_event, ctx) => {
-      (this.ui as any).setContext(ctx);
       this.restoreState(ctx);
     });
 
     pi.on("turn_end", (event, ctx) => {
-      (this.ui as any).setContext(ctx);
-      this.onTurnEnd(event);
+      this.onTurnEnd(event, ctx);
     });
 
     // ── Custom Tool: write_plan ──────────────────────────────────────
@@ -761,12 +775,6 @@ ${planContent}
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
-
-  /** Extract UI context from the current extension context. */
-  private getUiContext(ctx: ExtensionContext) {
-    const c = ctx as any;
-    return c as { hasUI: boolean; ui: { notify: (m: string, t?: string) => void; setStatus: (n: string, s?: string) => void; setWidget: (n: string, l?: string[]) => void; select: (t: string, o: string[]) => Promise<string | undefined>; confirm: (q: string, a: string) => Promise<boolean> } };
-  }
 
   private extractAssistantText(message: unknown): string {
     if (!message || (message as any).role !== "assistant") return "";

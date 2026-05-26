@@ -13,12 +13,3 @@ export interface ChecklistItem {
   completed: boolean;
 }
 
-export interface ToolEvent {
-  toolName: string;
-  input?: any;
-}
-
-export interface ContextEvent {
-  systemPrompt?: string;
-}
-

@@ -250,7 +250,6 @@ describe("PlanMode — Phase 5: Execution commands", () => {
         setWidget: vi.fn(),
         select: vi.fn().mockResolvedValue(undefined),
       };
-      (pm as any).ui.setContext(ctx as any);
 
       await pm.resumePlan(ctx);
       expect(notifyMock).toHaveBeenCalledWith("No plans found for this project.", "info");
