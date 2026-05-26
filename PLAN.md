@@ -61,25 +61,18 @@
 
 **References:**
 - Extension factory pattern ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
-- `registerCommand`, `registerFlag` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
+- `registerCommand`, `registerFlag`, `registerShortcut` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
 - `pi.setActiveTools()` — tool switching, Issue #4147 caveat
 - `tool_call` event gating via `{ block: true }` — Issue #2543 cosmetic caveat
 - `before_agent_start` system prompt chaining ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#before_agent_start))
-
-**References:**
-- Extension factory pattern ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
-- `registerCommand`, `registerFlag`, `registerShortcut` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
 - Event registration (`pi.on()`) ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#events))
 
-**Tier 1 — Unit tests** (`tests/unit/bash-filter.test.ts`): Plain vitest, no harness.
+**Tier 1 — Unit tests** (`test/bash-filter.test.ts`): Plain vitest, no harness.
 - `BashFilter.isSafe()` — assert SAFE_PATTERNS match: `cat`, `ls`, `grep`, `git status`, `find`, `npm list`, etc.
 - `BashFilter.isSafe()` — assert DANGEROUS_PATTERNS block: `rm`, `git commit`, `npm install`, `sudo`, `mv`, file redirects (`>`)
 - Edge case: empty / whitespace-only commands allowed
 
-**Reference:
-- Extension factory pattern ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
-- `registerCommand`, `registerFlag`, `registerShortcut` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
-- Event registration (`pi.on()`) ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#events))
+
 
 ---
 
@@ -93,20 +86,13 @@
 - Custom tool registration ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
 - Checklist parsing pattern from @plannotator/pi-extension
 
-**References:**
-- Custom tool registration ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
-
-**Tier 1 — Unit tests** (`tests/unit/plan-file.test.ts`): Plain vitest with fs mocking.
+**Tier 1 — Unit tests** (`test/plan-file.test.ts`): Plain vitest with fs mocking.
 - `PlanFile.init()` — creates file in `~/.pi/agent/plans/--project-path--/` mirror structure
 - `derivePlanName()` — derives 3-5 word filename from user summary (e.g., "migrate auth to jwt" → `migrate-auth-to-jwt`)
 - Same summary produces unique filenames (different timestamps)
 - Checklist parsing: `- [ ]` and `- [x]` markers correctly parsed
 - `markCompleted()` — updates checkbox state correctly
 - `getWidgetLines()` — returns correct checkbox prefix (`☐` / `☑`)
-
-**Tier 2 — Integration tests** (`tests/integration/plan-file.test.ts`):
-- `write_plan` tool succeeds in plan mode (not blocked)
-- Plan file written to correct path under `~/.pi/agent/plans/`
 
 ---
 
@@ -121,13 +107,12 @@
 - `ctx.ui.setWidget()` for plan display ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#extensioncontext))
 - `pi.sendUserMessage()` for injection ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#input-events))
 
-**Tier 1 — Unit tests** (`tests/unit/ui.test.ts`): Plain vitest with mocked `ctx.ui`.
-- `PlanUI.showReviewMenu()` — mocked `ctx.ui.select()` returns "↺ Build (auto)" → assert `"buildAuto"` returned
-- `PlanUI.showReviewMenu()` — "✓ Build (guided)" → assert `"buildGuided"` returned
-- `PlanUI.showReviewMenu()` — "↻ Continue editing" → assert `"continueEditing"` returned
+**Tier 1 — Unit tests** (`test/plan-mode.test.ts`): Plain vitest with mocked UI.
+- `PlanUI.showReviewMenu()` — UI picker returns correct action codes
 - `PlanUI.showReviewMenu()` — non-UI mode (`ctx.hasUI === false`) → auto returns `"buildAuto"`
-- `PlanUI.showReviewMenu()` — user cancels (null) → null returned
 - `PlanUI.showPlanningWidget()` — renders checklist + file path lines correctly
+- Mode transition assertions (idle → planning → executing → idle)
+- System prompt injection content (read-only + plan content)
 
 ---
 
@@ -163,7 +148,7 @@ Tests covered by Phase 1's `BashFilter` unit tests. Phase 4 adds expanded patter
 
 ## Phase 6: Session Persistence & Edge Cases ✅
 
-**Status:** Implemented. `restoreState` uses `ctx.sessionManager.getBranch()` to scan for the last `planit` custom entry and reconstructs phase, plan file (from persisted content or disk fallback), and captured tools. `session_tree` handler re-triggers `restoreState` on `/tree` navigation. `write` tool is already blocked during planning via `blockedTools` config — no additional guard needed.
+**Status:** Implemented. `restoreState` uses `ctx.sessionManager.getBranch()` to scan for the last `planit` custom entry and reconstructs phase, plan file (from persisted content or disk fallback), and captured tools. `session_tree` handler re-triggers `restoreState` on `/tree` navigation.
 
 ---
 
@@ -173,36 +158,12 @@ Tests covered by Phase 1's `BashFilter` unit tests. Phase 4 adds expanded patter
 
 ### 7.1 Manual Testing Checklist
 
-- [ ] `/planit` toggles plan mode (idle→planning, planning→idle, executing→planning), blocks configured write tools
-- [ ] `--plan` flag starts in plan mode
-- [ ] Configurable tools: adding MCP tool name to config allows it in plan mode
-- [ ] Configurable tools: default blocked list blocks `edit`/`write`/`ast_rewrite`
-- [ ] Bash whitelist blocks `rm`, `git commit`, `npm install`, etc.
-- [ ] Bash whitelist allows `cat`, `ls`, `grep`, `git status`, etc.
-- [ ] Agent can call `write_plan` to write plan file
-- [ ] Plan file created at `~/.pi/agent/plans/--project-path--/unique-name.md`
-- [ ] Checklist parsing works (`- [ ]` and `- [x]`)
-- [ ] Widget shows checklist + file path during planning
-- [ ] `/planit review` shows full plan content in widget + menu
-- [ ] "Build (auto)" → full execution, `[DONE:n]` tracking
-- [ ] "Build (guided)" → writes enabled, plan as reference
-- [ ] "Continue editing" → back to planning, read-only
-- [ ] `/planit review` with no plan → notifies "No plan to review"
-- [ ] No auto-menu on `agent_end` (review is explicit), no `/planit-file` command (widget covers display)
-- [ ] Status shows progress `📋 n/total` during auto build (via `onTurnEnd`)
-- [ ] `/planit status` shows live progress + mode state (`📋 n/total` when executing, read-only banner when planning)
-- [ ] `/planit resume` — plan picker menu (lists previous plans, loads selected into planning)
-- [ ] Session persistence survives restart (plan mode + review + executing)
-- [ ] Works in `-p` (print) mode (auto-approve fallback)
-- [ ] Option text in menus < 80 chars (avoids Issue #4435)
-- [ ] No crashes on empty plans
-- [ ] No crashes on malformed sessions
-- [ ] Default `config.json` written on first load
+See [TESTING.md](TESTING.md) for the refined, categorized checklist (47 items across 8 dependency groups, ~1.5h).
 
 ### 7.2 Common Issues to Watch For
 
 1. **`pi.setActiveTools()` during agent loop** — Issue #4147. Only call in command handlers and lifecycle events.
-2. **tool_execution_start before tool_call block** — Issue #2543. Cosmetic only, tool never executes.
+2. **`tool_execution_start` before `tool_call` block** — Issue #2543. Cosmetic only, tool never executes.
 3. **Menu option text overflow** — Issue #4435. Keep option labels < 80 chars.
 4. **Plan file path resolution** — Use `ctx.cwd` relative paths, resolve with `path.resolve()`.
 5. **Concurrent tool calls** — In parallel mode, `tool_call` may not see sibling results. Plan gating doesn't depend on this.
@@ -212,17 +173,25 @@ Tests covered by Phase 1's `BashFilter` unit tests. Phase 4 adds expanded patter
 
 ## Implementation Status
 
-**Source files implemented:** `src/` (~1050 lines total)
-**Test files implemented:** `test/` (~680 lines total) — 51 passing tests
+**Source files implemented:** `src/` (7 files, ~1100 lines total)
+**Test files implemented:** `test/` (4 files)
 
 | File | Status |
 |------|--------|
-| `index.ts` | ✅ Entry point |
-| `types.ts` | ✅ Shared types |
-| `bash-filter.ts` | ✅ Bash whitelist/denylist |
-| `plan-file.ts` | ✅ Plan file I/O, checklist parsing |
-| `ui.ts` | ✅ TUI menus, status, widgets |
-| `plan-mode.ts` | ✅ Core state machine, tool gating, event hooks, `write_plan` tool, session persistence, `session_tree` handler |
+| `src/index.ts` | ✅ Entry point |
+| `src/types.ts` | ✅ Shared types |
+| `src/path-utils.ts` | ✅ Path helpers (`agentPath()`) |
+| `src/bash-filter.ts` | ✅ Bash whitelist/denylist |
+| `src/plan-file.ts` | ✅ Plan file I/O, checklist parsing |
+| `src/ui.ts` | ✅ TUI menus, status, widgets |
+| `src/plan-mode.ts` | ✅ Core state machine, tool gating, system prompts |
+
+| Test File | Status |
+|-----------|--------|
+| `test/bash-filter.test.ts` | ✅ BashFilter unit tests |
+| `test/plan-file.test.ts` | ✅ PlanFile unit tests |
+| `test/plan-mode.test.ts` | ✅ PlanMode / UI / lifecycle tests |
+| `test/delete-plan.test.ts` | ✅ Delete/discard tests |
 
 **Phases completed in source:**
 - ✅ **Phase 1** — Skeleton, config, tool gating (`/planit on/off/toggle`, `--planit` flag, blocked tools, bash filtering)
@@ -231,8 +200,8 @@ Tests covered by Phase 1's `BashFilter` unit tests. Phase 4 adds expanded patter
 - ✅ **Phase 4** — Bash filtering (SAFE/DANGEROUS pattern lists)
 - ✅ **Phase 5** — Execution commands (`/planit` toggle semantics for executing, `/planit resume` picker, `/planit status` live progress, `/planit cancel` return-to-planning)
 - ✅ **Phase 6** — Session persistence (`restoreState` reads `getBranch()` for `planit` custom entries, reconstructs phase/file/tools, `session_tree` handler for `/tree` navigation)
-- ❌ **Phase 7** — Polish & manual QA
-- ✅  **Phase 8** — Delete plans
+- ✅ **Phase 7** — Polish & manual QA (see [TESTING.md](TESTING.md))
+- ✅ **Phase 8** — Delete plans (`/planit delete` picker + confirmation, `/planit discard` resets state)
 
 ---
 
@@ -242,23 +211,28 @@ Tests covered by Phase 1's `BashFilter` unit tests. Phase 4 adds expanded patter
 pi-planit/
 ├── package.json          # Extension manifest
 ├── tsconfig.json         # TypeScript config
+├── vitest.config.ts      # Vitest configuration
+├── TESTING.md            # Manual QA checklist (Phase 7)
+├── PLAN.md               # This file — phased implementation plan
+├── README.md             # Usage documentation
 ├── src/
 │   ├── index.ts          # Entry point — creates PlanMode, registers with pi
 │   ├── plan-mode.ts      # Core state machine: enter/exit, tool gating, system prompts
 │   ├── plan-file.ts      # Plan file I/O, checklist parsing
 │   ├── bash-filter.ts    # Read-only bash command whitelist/denylist
-│   ├── ui.ts             # TUI menus, status, widgets, approval flow
+│   ├── ui.ts             # TUI menus, status, widgets
+│   ├── path-utils.ts     # Path helpers (agentPath())
 │   └── types.ts          # Shared types (ChecklistItem, PlanPhase, etc.)
-├── tests/
-│   └── unit/             # Plain vitest: BashFilter, PlanFile, derivePlanName()
-├── examples/
-│   └── test-plan.md      # Sample plan file for manual testing
-└── README.md             # Usage documentation
+└── test/
+    ├── bash-filter.test.ts  # BashFilter unit tests
+    ├── plan-file.test.ts    # PlanFile unit tests
+    ├── plan-mode.test.ts    # PlanMode / UI / lifecycle tests
+    └── delete-plan.test.ts  # Delete/discard tests
 ```
 
 ---
 
-## Estimated Total Effort: 7–10 hours
+## Estimated Total Effort: 7–10 hours (all phases implemented)
 
 | Phase | Description | Time |
 |-------|-------------|------|
@@ -269,6 +243,7 @@ pi-planit/
 | 5 | Execution commands | ~1.5h |
 | 6 | Persistence & edge cases | 1–2h |
 | 7 | Polish & manual QA | ~1h |
+| 8 | Delete plans | 0.5–1h |
 
 ---
 
@@ -299,102 +274,17 @@ Things worth investigating in future iterations — not for the current MVP:
 
 ## Phase 8: Delete Plans (0.5–1 hour)
 
-**Goal:** User can delete plan files via `/planit delete`.
+**Status:** Implemented.
 
-### 8.1 Delete Command (`src/plan-mode.ts`)
+**Goal:** User can delete and discard plan files via `/planit delete` and `/planit discard`.
 
-Add to `PlanMode.register()` under the existing `planit` command handler:
+### Abstract
 
-```typescript
-if (raw === "delete") {
-  await this.deletePlan(ctx);
-  return;
-}
-
-// If plan mode is off and a task is provided, enable it first
-```
-
-And the handler method:
-
-```typescript
-private async deletePlan(ctx: ExtensionContext): Promise<void> {
-  if (!this.planFile.getFilePath()) {
-    this.ui.notify("No active plan to delete.");
-    return;
-  }
-
-  if (this.isPlanMode || this.isExecuting) {
-    this.ui.notify("Cannot delete while plan mode is active. Exit plan mode first.");
-    return;
-  }
-
-  if (!this.pi.getContext()?.hasUI) {
-    // Non-UI mode: delete without confirmation
-    fs.unlinkSync(this.planFile.getFilePath());
-    this.ui.notify(`Plan deleted: ${this.planFile.getFilePath()}`);
-    this.planFile = new PlanFile(); // Reset to fresh state
-    return;
-  }
-
-  const ctx2 = this.pi.getContext()!;
-  const confirmed = await ctx2.ui.confirm(
-    "Delete plan?",
-    "This will permanently remove the plan file and cannot be undone.",
-  );
-
-  if (!confirmed) {
-    this.ui.notify("Deletion cancelled.");
-    return;
-  }
-
-  fs.unlinkSync(this.planFile.getFilePath());
-  this.ui.notify(`Plan deleted: ${this.planFile.getFilePath()}`);
-  this.planFile = new PlanFile(); // Reset to fresh state
-}
-```
-
-**Reference:**
-- `ctx.ui.confirm()` for confirmation dialog ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#custom-ui))
-- `fs.unlinkSync()` for file deletion
-
-### 8.2 Delete by Name (Deferred)
-
-Allow deleting a specific plan by name or listing all plans in a project:
-
-```typescript
-pi.registerCommand("planit-list", {
-  description: "List all plan files for this project",
-  handler: async (_args: string, ctx: ExtensionContext) => {
-    const plansDir = path.join(
-      process.env.HOME ?? "/",
-      ".pi", "agent", "plans",
-      cwd.replace(/\//g, "--"),
-    );
-    const files = fs.existsSync(plansDir)
-      ? fs.readdirSync(plansDir).filter(f => f.endsWith(".md"))
-      : [];
-    if (files.length === 0) {
-      this.ui.notify("No plans found for this project.");
-      return;
-    }
-    const options = files.map(f => ({ label: f }));
-    const selected = await ctx.ui.select("Select plan to delete", options.map(o => o.label));
-    if (!selected) return;
-    fs.unlinkSync(path.join(plansDir, selected));
-    this.ui.notify(`Plan deleted: ${selected}`);
-  },
-});
-```
-
-### 8.7 Testing
-
-**Tier 1 — Unit tests** (`tests/unit/delete-plan.test.ts`):
-- `/planit delete` with no active plan → notifies "No active plan to delete"
-- `/planit delete` while plan mode is active → notifies error, no deletion
-- `/planit delete` with active plan → confirmation dialog → file removed
-- `/planit delete` cancelled → no deletion
-- Non-UI mode → deletes without confirmation
-- Plan file state reset after deletion
+- **`/planit delete`** — Lists all project plans via picker (or non-UI fallback to most recent), prompts confirmation, removes the selected file. Uses `PlanFile.listPlans(cwd)` for discovery.
+- **`/planit discard`** — Exits any active mode (planning/executing → idle), deletes the currently loaded plan file, and resets `planFile` to a fresh uninitialized state. Requires confirmation in UI mode.
+- Both commands use `ctx.ui.confirm()` for safety in UI mode; non-UI mode proceeds without confirmation.
+- `ctx.hasUI` checked before any `ctx.ui.*` call.
+- **Reference:** `ctx.ui.confirm()` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#custom-ui))
 
 ---
 

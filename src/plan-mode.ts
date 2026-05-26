@@ -6,6 +6,7 @@ import type {
   ToolCallEvent,
   BeforeAgentStartEvent,
   TurnEndEvent,
+  AgentEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import type {
   PlanPhase,
@@ -89,6 +90,7 @@ export class PlanMode {
   private ui: PlanUI;
   private config: PlanModeConfig;
   private buildMode: "auto" | "guided" = "auto";
+  private reviewPending: boolean = false;
 
   constructor(
     private pi: ExtensionAPI,
@@ -335,6 +337,27 @@ ${planContent}
     }
   }
 
+  // ── Agent End: show review menu if agent just wrote the plan ────────
+
+  onAgentEnd(_event: AgentEndEvent, ctx: ExtensionContext): void {
+    if (!this.reviewPending) return;
+    this.reviewPending = false;
+
+    if (!this.planFile.hasSteps()) {
+      this.ui.notify("Agent did not write a plan. You can try /planit review again.", "info", ctx.hasUI, ctx.ui);
+      return;
+    }
+
+    this.ui.notify("Plan written to file. Opening review...", "info", ctx.hasUI, ctx.ui);
+    this.ui.showReviewMenu(
+      this.planFile.getContent(),
+      this.planFile.getFilePath(),
+      this.planFile.getTitle(),
+      ctx.hasUI,
+      ctx.ui,
+    );
+  }
+
   // ── State Persistence ──────────────────────────────────────────────
 
   private persistState(_ctx: ExtensionContext): void {
@@ -407,32 +430,37 @@ ${planContent}
   // ── Review Flow ────────────────────────────────────────────────────
 
   private reviewPlan(ctx: ExtensionContext): void {
-    if (!this.planFile.hasSteps()) {
-      this.ui.notify("No plan to review. Ask the agent to write a plan first.", "info", ctx.hasUI, ctx.ui);
+    if (this.planFile.hasSteps()) {
+      this.ui.showReviewMenu(
+        this.planFile.getContent(),
+        this.planFile.getFilePath(),
+        this.planFile.getTitle(),
+        ctx.hasUI,
+        ctx.ui,
+      ).then((result) => {
+        if (!result) return;
+        switch (result) {
+          case "buildAuto":
+            this.build("auto", ctx);
+            break;
+          case "buildGuided":
+            this.build("guided", ctx);
+            break;
+          case "continueEditing":
+            this.continueEditing(ctx);
+            break;
+        }
+      });
       return;
     }
 
-    this.ui.showReviewMenu(
-      this.planFile.getContent(),
-      this.planFile.getFilePath(),
-      this.planFile.getTitle(),
-      ctx.hasUI,
-      ctx.ui,
-    ).then((result) => {
-      if (!result) return;
-
-      switch (result) {
-        case "buildAuto":
-          this.build("auto", ctx);
-          break;
-        case "buildGuided":
-          this.build("guided", ctx);
-          break;
-        case "continueEditing":
-          this.continueEditing(ctx);
-          break;
-      }
-    });
+    // No plan on disk yet — prompt agent to write it first
+    this.reviewPending = true;
+    this.ui.notify("No plan written yet. Asking agent to write the plan to file...", "info", ctx.hasUI, ctx.ui);
+    this.pi.sendUserMessage(
+      "Please write the plan you have in mind to the plan file using the write_plan tool so you can review it.",
+      { deliverAs: "followUp" },
+    );
   }
 
   private build(mode: "auto" | "guided", ctx: ExtensionContext): void {
@@ -717,6 +745,10 @@ ${planContent}
 
     pi.on("turn_end", (event, ctx) => {
       this.onTurnEnd(event, ctx);
+    });
+
+    pi.on("agent_end", (event: AgentEndEvent, ctx: ExtensionContext) => {
+      this.onAgentEnd(event, ctx);
     });
 
     // ── Custom Tool: write_plan ──────────────────────────────────────

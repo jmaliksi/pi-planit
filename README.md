@@ -17,11 +17,13 @@ This lets you and the agent inspect, analyze, and design without the risk of acc
 | Command | `/planit` — toggles on/off |
 | Flag | `--planit` — starts the session in plan mode |
 
+Entering plan mode enables read-only tools only. No plan file is created until the agent writes one.
+
 ### Plan File
 
-When you enter plan mode, a structured plan file is created at `~/.pi/agent/plans/<project-path>/<plan-name>.md` (mirroring your project directory). The agent writes plans to this file using the built-in `write_plan` tool — no need for the agent to use `write` (which is blocked).
+The agent creates the plan file using the built-in `write_plan` tool (which is available in plan mode; `write` and `edit` are blocked). Files are stored at `~/.pi/agent/plans/<project-path>/<plan-name-timestamp>.md` (mirroring your project directory).
 
-Plan files include sections for **Summary**, **Steps** (with checklists), **Plan Details**, and **Assumptions**. The checklist format `- [ ] Step N: description` is auto-detected and rendered in a TUI widget.
+Plan files include sections for **Title**, **Summary**, **Steps** (with checklists), **Plan Details**, and **Assumptions & Reference**. The checklist format `- [ ] Step N: description` is auto-detected and rendered in a TUI widget.
 
 ### Live Widget
 
@@ -54,10 +56,27 @@ Plan mode tools are configurable via `~/.pi/agent/extensions/pi-planit/config.js
 
 ---
 
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/planit` | Toggle plan mode on/off (idle ↔ planning) |
+| `/planit on` / `/planit enable` / `/planit start` | Enter planning mode |
+| `/planit off` / `/planit disable` / `/planit stop` / `/planit exit` | Exit plan mode |
+| `/planit review` | Review the plan and choose an execution mode (auto, guided, or continue editing) |
+| `/planit resume` | Browse past plans and load a selected one into planning mode |
+| `/planit cancel` | Cancel execution (return to planning) or exit planning mode |
+| `/planit delete` | Delete a plan file via a picker + confirmation dialog |
+| `/planit discard` | Remove the currently active plan file |
+| `/planit status` | Show current plan mode state and progress |
+
 ## Usage
 
 ```bash
-# Enter plan mode, ask the agent to plan something
+# Start a session in plan mode via flag
+--planit
+
+# Or enter plan mode mid-session
 /planit migrate auth to JWT
 
 # The agent explores the codebase and writes a plan
@@ -66,12 +85,21 @@ Plan mode tools are configurable via `~/.pi/agent/extensions/pi-planit/config.js
 # Review the plan and choose an execution mode
 /planit review
 
-# Or check status at any time
+# Check status at any time
 /planit status
+
+# Resume a past plan
+/planit resume
 
 # Exit plan mode
 /planit off
 ```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PI_CODING_AGENT_DIR` | Override the default agent directory (`~/.pi/agent`). Plan files, config, and session data are stored relative to this path. |
 
 ---
 
@@ -97,11 +125,8 @@ Copy the `dist` output to your pi installation's extension directory, or add the
 ### Run Tests
 
 ```bash
-# Unit tests (plain vitest)
-npx vitest run tests/unit
-
-# Integration tests (requires pi-test-harness + running pi instance)
-npx vitest run tests/integration
+# All tests (vitest, flat in test/)
+npx vitest run
 ```
 
 ### File Structure
@@ -115,11 +140,3 @@ src/
 ├── ui.ts             # TUI menus, status bar, widget rendering
 └── types.ts          # Shared type definitions
 ```
-
-### Planned
-
-- `/planit delete` — delete a plan file
-- `/planit resume` — resume an interrupted execution
-- `/planit status` — detailed progress display
-- Session persistence (state survives session restarts)
-- Plan picker to browse and select past plans
