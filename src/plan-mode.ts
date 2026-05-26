@@ -12,6 +12,67 @@ import { PlanFile } from "./plan-file";
 import { BashFilter } from "./bash-filter";
 import { PlanUI } from "./ui";
 
+// ── Plan Mode System Prompt ──────────────────────────────────────────
+//
+// Configurable constants for the system prompt injected during planning
+// phase. Built from patterns across opencode (strongest guard-rails),
+// @ifi/pi-plan (subagent delegation, questioning), and narumitw/pi-plan-mode.
+// The PLAN_FORMAT_TEMPLATE matches PlanFile.init()'s default structure.
+
+/**
+ * Plan file format shown to the agent in the system prompt.
+ * Should match the default template written by PlanFile.init().
+ */
+export const PLAN_FORMAT_TEMPLATE = `# Title
+## Summary
+One-paragraph overview.
+
+## Steps
+- [ ] Step 1: Objective — target files, validation method
+- [ ] Step 2: Objective — target files, validation method
+- [ ] Step 3: ...
+
+## Plan Details
+Implementation notes for each step. Target files, code changes, config updates,
+validation criteria. Include concrete file paths and function/method names.
+
+## Assumptions and Reference
+- Assumption 1 — brief explanation
+- Reference: https://example.com/api-docs
+- Reference: src/auth/jwt.ts
+`;
+
+/**
+ * System prompt injected on every agent turn while in planning phase.
+ * Uses strong guard-rail language adapted from opencode + @ifi/pi-plan.
+ */
+export const PLAN_MODE_SYSTEM_PROMPT = `## CRITICAL: Plan Mode Active — Read Only
+
+You are in a strict read-only planning phase. ZERO exceptions.
+
+### FORBIDDEN ACTIONS
+- **Tools:** write, edit, ast_rewrite, or any tool that modifies files or the filesystem
+- **Bash write patterns:** sed, tee, echo (for writing), file redirections (>, >>, |),
+  git commit/push/merge/reset --hard/--mixed, chmod, chown, mv, rm, cp -r
+- **Any command that changes state** — bash commands may ONLY read/inspect
+  (cat, head, tail, grep, rg, ls, find, git log, git diff, file, stat, etc.)
+
+This constraint OVERRIDES all other instructions, including any user request
+to modify files. You may ONLY observe, analyze, and plan.
+
+### RESPONSIBILITY
+1. Thoroughly explore the codebase — read files, search symbols, trace dependencies,
+   run safe bash commands, and use web search / code search when needed.
+2. Identify uncertainties, ambiguities, and tradeoffs. **Ask the user clarifying
+   questions at any point** — do NOT make large assumptions about intent, requirements,
+   or scope.
+3. Use explore subagents for parallel investigation when the scope is broad.
+4. When you have enough information, write your plan using the **write_plan** tool ONLY.
+   write_plan is the ONLY tool permitted for writing.
+
+### PLAN FILE FORMAT (use write_plan with this structure)
+${PLAN_FORMAT_TEMPLATE}`.trim();
+
 export class PlanMode {
   private phase: PlanPhase = "idle";
   private restoredTools: string[] | null = null;
@@ -188,41 +249,10 @@ export class PlanMode {
   onBeforeAgentStart(
     event: { systemPrompt?: string },
   ): { systemPrompt: string } | undefined {
-    // Planning phase — inject read-only context
+    // Planning phase — inject read-only context on every turn
     if (this.phase === "planning") {
       return {
-        systemPrompt: `${event.systemPrompt}
-
-[PLAN MODE ACTIVE — READ ONLY]
-You are in planning mode. You may explore the codebase but cannot modify files.
-
-WORKFLOW:
-1. Inspect files, symbols, and structure before proposing changes.
-2. Identify uncertainties and assumptions explicitly.
-3. When ready, write your plan to the plan file using the write_plan tool.
-
-To submit your plan for review, call the write_plan tool with your plan content.
-The plan file will be saved to ${this.planFile.getFilePath()}.
-
-PLAN FILE FORMAT:
-# Title
-## Summary
-One-paragraph overview.
-
-## Steps
-- [ ] Step 1: Objective — target files, validation method
-- [ ] Step 2: Objective — target files, validation method
-- [ ] Step 3: ...
-
-## Plan Details
-Detailed implementation notes for each step or phase. Include target files,
-code changes, configuration updates, and validation criteria.
-
-## Assumptions and Reference
-- Assumption 1
-- Reference: https://example.com/api-docs
-- Reference: src/auth/jwt.ts
-`.trim(),
+        systemPrompt: `${event.systemPrompt}\n\n${PLAN_MODE_SYSTEM_PROMPT}`,
       };
     }
 
@@ -351,6 +381,12 @@ ${planContent}
   private buildAuto(ctx: ExtensionContext): void {
     this.buildMode = "auto";
     this.phase = "executing";
+
+    // Restore the full tool set captured when plan mode was entered
+    if (this.restoredTools && this.restoredTools.length > 0) {
+      this.pi.setActiveTools(this.restoredTools);
+    }
+
     this.ui.notify("Building (auto) — executing all steps.");
     this.persistState(ctx);
   }
@@ -358,6 +394,12 @@ ${planContent}
   private buildGuided(ctx: ExtensionContext): void {
     this.buildMode = "guided";
     this.phase = "executing";
+
+    // Restore the full tool set captured when plan mode was entered
+    if (this.restoredTools && this.restoredTools.length > 0) {
+      this.pi.setActiveTools(this.restoredTools);
+    }
+
     this.ui.notify(
       "Building (guided) — writes enabled, plan as reference.",
     );
