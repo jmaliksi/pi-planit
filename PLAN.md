@@ -232,7 +232,7 @@ Tests covered by Phase 1's `BashFilter` unit tests. Phase 4 adds expanded patter
 - ✅ **Phase 5** — Execution commands (`/planit` toggle semantics for executing, `/planit resume` picker, `/planit status` live progress, `/planit cancel` return-to-planning)
 - ✅ **Phase 6** — Session persistence (`restoreState` reads `getBranch()` for `planit` custom entries, reconstructs phase/file/tools, `session_tree` handler for `/tree` navigation)
 - ❌ **Phase 7** — Polish & manual QA
-- ❌ **Phase 8** — Delete plans — not yet implemented
+- ✅  **Phase 8** — Delete plans
 
 ---
 
@@ -406,6 +406,4 @@ pi.registerCommand("planit-list", {
 - **Plan sharing** — Export plan to clipboard or file path
 - **Plan versioning** — Track plan revisions over time
 - **Inline plan editing** — Edit plan file from within TUI
-- **Plan chat** - plan starts without any directive to write a file, make that a discrete step.
-- **use PI_AGENT_DIR** - instead of home. also make the directory in general configurable (per project config?)
-- **project plan path** - related to above, have option to store plans in cwd rather than pi global
+- **YAML frontmatter for state**

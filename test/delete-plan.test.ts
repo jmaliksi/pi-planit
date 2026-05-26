@@ -335,15 +335,16 @@ describe("PlanMode — plan deletion and discard", () => {
       expect(calls.length).toBeGreaterThan(0);
     });
 
-    it("throws when plan file on disk is missing", async () => {
+    it("gracefully handles missing plan file on disk", async () => {
       const { pi } = createMockPI();
       const cwd = "/tmp/test-project";
       const ghostPath = path.join(plansDir(cwd), "ghost-plan-2026-01-01T00-00-00.md");
       const pm = new PlanMode(pi);
       const ctx = pi.getContext()!;
       (ctx as any).hasUI = true;
+      const notify = vi.fn();
       ctx.ui = {
-        notify: vi.fn(),
+        notify,
         setStatus: vi.fn(),
         setWidget: vi.fn(),
         select: vi.fn(),
@@ -353,7 +354,10 @@ describe("PlanMode — plan deletion and discard", () => {
       };
       (pm as any).planFile.filePath = ghostPath;
 
-      await expect((pm as any).discardPlan(ctx)).rejects.toThrow(/ENOENT|no such file|exist/);
+      await (pm as any).discardPlan(ctx);
+
+      expect(notify).toHaveBeenCalledWith("Plan file not found on disk.", "warning");
+      expect((pm as any).planFile.getFilePath()).toBe("");
     });
   });
 });

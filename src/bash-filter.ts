@@ -62,9 +62,9 @@ export class BashFilter {
     /\bshred\b/,
 
     // Redirects (writes to files)
-    />\s*\S/,
-    />>\s*\S/,
-    /\|\s*>\s*\S/,
+    />\s*(?!\/dev\/null\b)\S/,
+    />>\s*(?!\/dev\/null\b)\S/,
+    /\|\s*>\s*(?!\/dev\/null\b)\S/,
 
     // Git mutations
     /\bgit\s+(commit|push|pull|merge|rebase|reset\s+(--hard|--mixed)|checkout\s+-b|push\s+--force|push\s+-f)\b/,

@@ -55,7 +55,8 @@ export const PLAN_MODE_SYSTEM_PROMPT = `## CRITICAL: Plan Mode Active — Read O
 You are in a strict read-only planning phase. ZERO exceptions.
 
 ### FORBIDDEN ACTIONS
-- **Tools:** write, edit, ast_rewrite, or any tool that modifies files or the filesystem
+- **Tools:** write, edit, ast_rewrite — these are FORBIDDEN and will be BLOCKED.
+  Use write_plan ONLY when the user explicitly tells you to write the plan.
 - **Bash write patterns:** sed, tee, echo (for writing), file redirections (>, >>, |),
   git commit/push/merge/reset --hard/--mixed, chmod, chown, mv, rm, cp -r
 - **Any command that changes state** — bash commands may ONLY read/inspect
@@ -64,6 +65,11 @@ You are in a strict read-only planning phase. ZERO exceptions.
 This constraint OVERRIDES all other instructions, including any user request
 to modify files. You may ONLY observe, analyze, and plan.
 
+### PLAN WRITING
+- **Do NOT write the plan file unless the user explicitly asks you to.**
+- Present your findings and proposed plan in chat first.
+- When the user says to write the plan, use the **write_plan** tool ONLY.
+
 ### RESPONSIBILITY
 1. Thoroughly explore the codebase — read files, search symbols, trace dependencies,
    run safe bash commands, and use web search / code search when needed.
@@ -71,8 +77,6 @@ to modify files. You may ONLY observe, analyze, and plan.
    questions at any point** — do NOT make large assumptions about intent, requirements,
    or scope.
 3. Use explore subagents for parallel investigation when the scope is broad.
-4. When you have enough information, write your plan using the **write_plan** tool ONLY.
-   write_plan is the ONLY tool permitted for writing.
 
 ### PLAN FILE FORMAT (use write_plan with this structure)
 ${PLAN_FORMAT_TEMPLATE}`.trim();
@@ -86,9 +90,13 @@ export class PlanMode {
   private config: PlanModeConfig;
   private buildMode: "auto" | "guided" = "auto";
 
-  constructor(private pi: ExtensionAPI) {
-    this.planFile = new PlanFile();
-    this.bashFilter = new BashFilter();
+  constructor(
+    private pi: ExtensionAPI,
+    planFile: PlanFile = new PlanFile(),
+    bashFilter: BashFilter = new BashFilter(),
+  ) {
+    this.planFile = planFile;
+    this.bashFilter = bashFilter;
     this.ui = new PlanUI();
     this.config = this.loadConfig();
   }
@@ -170,7 +178,6 @@ export class PlanMode {
 
   private enterPlanning(
     ctx: ExtensionContext,
-    userSummary: string = "untitled",
   ): void {
     if (this.phase === "planning") {
       this.ui.notify("Plan mode is already enabled.", "info", ctx.hasUI, ctx.ui);
@@ -187,15 +194,7 @@ export class PlanMode {
 
     this.pi.setActiveTools(readOnlyTools);
     this.phase = "planning";
-    this.planFile.init(ctx.cwd, userSummary);
     this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
-    this.ui.showPlanningWidget(
-      this.planFile.getFilePath(),
-      this.planFile.getTitle(),
-      this.planFile.getWidgetLines(),
-      ctx.hasUI,
-      ctx.ui,
-    );
     this.ui.notify("Plan mode enabled (read-only).", "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
   }
@@ -297,7 +296,7 @@ ${planContent}
   onSessionStart(_event: unknown, ctx: ExtensionContext): void {
     // Auto-enter plan mode if --planit flag was passed
     if (this.pi.getFlag("planit")) {
-      this.enterPlanning(ctx, "--planit");
+      this.enterPlanning(ctx);
       return;
     }
     this.restoreState(ctx);
@@ -370,8 +369,8 @@ ${planContent}
         return; // No plan file to restore
       }
 
-      // Restore captured tools
-      this.restoredTools = data.restoredTools ?? null;
+      // Capture the current session's tool set (not stale persisted ones)
+      this.restoredTools = this.pi.getAllTools().map((t) => t.name);
 
       if (data.phase === "planning") {
         const readOnlyTools = this.getReadOnlyTools();
@@ -389,6 +388,7 @@ ${planContent}
         );
         this.ui.notify("Plan mode restored from session.", "info", ctx.hasUI, ctx.ui);
       } else if (data.phase === "executing") {
+        // Restore full tool set so the agent can write again.
         if (this.restoredTools && this.restoredTools.length > 0) {
           this.pi.setActiveTools(this.restoredTools);
         }
@@ -453,9 +453,10 @@ ${planContent}
   }
 
   private continueEditing(ctx: ExtensionContext): void {
+    this.captureCurrentTools();
     this.phase = "planning";
 
-    // Restore read-only tools
+    // Switch to read-only tools
     const readOnlyTools = this.getReadOnlyTools();
     if (readOnlyTools.length > 0) {
       this.pi.setActiveTools(readOnlyTools);
@@ -495,6 +496,7 @@ ${planContent}
     if (!ctx.hasUI) {
       const latest = plans[0];
       this.planFile.load(latest.filePath);
+      this.captureCurrentTools();
       const readOnlyTools = this.getReadOnlyTools();
       if (readOnlyTools.length > 0) {
         this.pi.setActiveTools(readOnlyTools);
@@ -545,6 +547,7 @@ ${planContent}
     this.planFile.load(selectedPlan.filePath);
 
     // Enter planning mode with the loaded plan
+    this.captureCurrentTools();
     const readOnlyTools = this.getReadOnlyTools();
     if (readOnlyTools.length > 0) {
       this.pi.setActiveTools(readOnlyTools);
@@ -567,7 +570,8 @@ ${planContent}
    */
   private cancelPlan(ctx: ExtensionContext): void {
     if (this.isExecuting) {
-      // Return to planning: restore read-only tools
+      // Return to planning: capture current tools, then switch to read-only
+      this.captureCurrentTools();
       this.phase = "planning";
       const readOnlyTools = this.getReadOnlyTools();
       if (readOnlyTools.length > 0) {
@@ -642,7 +646,7 @@ ${planContent}
             this.ui.setStatus(`\uD83D\uDCCB ${completed}/${total}`, ctx.hasUI, ctx.ui);
             this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
           } else {
-            this.ui.notify("Plan mode: OFF (default YOLO mode)", "info", ctx.hasUI, ctx.ui);
+            this.ui.notify("Plan mode: OFF", "info", ctx.hasUI, ctx.ui);
           }
           return;
         }
@@ -850,6 +854,12 @@ ${planContent}
       this.ui.notify("Execution cancelled.", "info", ctx.hasUI, ctx.ui);
     }
 
+    if (!fs.existsSync(filePath)) {
+      this.ui.notify("Plan file not found on disk.", "warning", ctx.hasUI, ctx.ui);
+      this.planFile = new PlanFile();
+      return;
+    }
+
     if (!ctx.hasUI) {
       // Non-UI mode: delete without confirmation
       fs.unlinkSync(filePath);
@@ -880,10 +890,16 @@ ${planContent}
     if (!message || (message as any).role !== "assistant") return "";
     const msg = message as any;
     if (typeof msg.content === "string") return msg.content;
-    if (!Array.isArray(msg.content)) return "";
-    return msg.content
-      .filter((b: unknown) => typeof b === "object" && b !== null && (b as any).type === "text")
-      .map((b: unknown) => (b as any).text ?? "")
-      .join("\n");
+    if (!Array.isArray(msg.content)) {
+      console.warn(`[planit] assistant message has unexpected content type: ${typeof msg.content}`);
+      return "";
+    }
+    const textBlocks = msg.content.filter(
+      (b: unknown) => typeof b === "object" && b !== null && (b as any).type === "text",
+    );
+    if (textBlocks.length === 0 && msg.content.length > 0) {
+      console.warn("[planit] assistant message has no text blocks — [DONE:n] tracking skipped");
+    }
+    return textBlocks.map((b: unknown) => (b as any).text ?? "").join("\n");
   }
 }

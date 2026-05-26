@@ -1,4 +1,4 @@
-export type PlanPhase = "idle" | "planning" | "review" | "executing";
+export type PlanPhase = "idle" | "planning" | "executing";
 
 export interface PlanModeConfig {
   /** Tool names allowed in plan mode (intersection with available tools) */

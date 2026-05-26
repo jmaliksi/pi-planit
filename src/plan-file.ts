@@ -162,6 +162,8 @@ export class PlanFile {
    *
    * When `content` is provided, it is used directly (bypassing disk I/O)
    * and also written to disk to keep the file in sync.
+   *
+   * @throws If the file does not exist and no content is provided.
    */
   load(filePath: string, content?: string): void {
     this.filePath = filePath;
@@ -172,7 +174,9 @@ export class PlanFile {
     } else if (fs.existsSync(filePath)) {
       this.content = fs.readFileSync(filePath, "utf-8");
     } else {
-      this.content = "";
+      throw new Error(
+        `Plan file not found: ${filePath}`,
+      );
     }
 
     this.parseChecklist();
