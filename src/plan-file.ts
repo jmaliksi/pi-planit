@@ -24,13 +24,9 @@ function derivePlanName(userSummary: string): string {
 }
 
 export class PlanFile {
-  private filePath: string;
+  private filePath: string = "";
   content: string = "";
   private items: ChecklistItem[] = [];
-
-  constructor() {
-    this.filePath = "";
-  }
 
   /**
    * Initialize plan file in ~/.pi/agent/plans/--project-path--/ mirror structure.
@@ -59,7 +55,6 @@ export class PlanFile {
 ## Assumptions and Reference
 `;
     fs.writeFileSync(planPath, this.content, "utf-8");
-    this.content = fs.readFileSync(planPath, "utf-8");
     this.parseChecklist();
   }
 
@@ -110,8 +105,7 @@ export class PlanFile {
 
     return this.items.map((item) => {
       const prefix = item.completed ? "☑ " : "☐ ";
-      const text = item.completed ? `[${item.step}] ${item.text}` : `[${item.step}] ${item.text}`;
-      return `${prefix}${text}`;
+      return `${prefix}[${item.step}] ${item.text}`;
     });
   }
 

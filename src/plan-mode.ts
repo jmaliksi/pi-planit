@@ -425,10 +425,10 @@ ${planContent}
 
       switch (result) {
         case "buildAuto":
-          this.buildAuto(ctx);
+          this.build("auto", ctx);
           break;
         case "buildGuided":
-          this.buildGuided(ctx);
+          this.build("guided", ctx);
           break;
         case "continueEditing":
           this.continueEditing(ctx);
@@ -437,8 +437,8 @@ ${planContent}
     });
   }
 
-  private buildAuto(ctx: ExtensionContext): void {
-    this.buildMode = "auto";
+  private build(mode: "auto" | "guided", ctx: ExtensionContext): void {
+    this.buildMode = mode;
     this.phase = "executing";
 
     // Restore the full tool set captured when plan mode was entered
@@ -446,22 +446,11 @@ ${planContent}
       this.pi.setActiveTools(this.restoredTools);
     }
 
-    this.ui.notify("Building (auto) — executing all steps.");
-    this.persistState(ctx);
-  }
-
-  private buildGuided(ctx: ExtensionContext): void {
-    this.buildMode = "guided";
-    this.phase = "executing";
-
-    // Restore the full tool set captured when plan mode was entered
-    if (this.restoredTools && this.restoredTools.length > 0) {
-      this.pi.setActiveTools(this.restoredTools);
-    }
-
-    this.ui.notify(
-      "Building (guided) — writes enabled, plan as reference.",
-    );
+    const messages = {
+      auto: "Building (auto) — executing all steps.",
+      guided: "Building (guided) — writes enabled, plan as reference.",
+    };
+    this.ui.notify(messages[mode]);
     this.persistState(ctx);
   }
 
@@ -781,23 +770,12 @@ ${planContent}
 
   private extractAssistantText(message: unknown): string {
     if (!message || (message as any).role !== "assistant") return "";
-
     const msg = message as any;
-
-    if (typeof msg.content === "string") {
-      return msg.content;
-    }
-
+    if (typeof msg.content === "string") return msg.content;
     if (!Array.isArray(msg.content)) return "";
-
     return msg.content
-      .filter(
-        (block: unknown) =>
-          typeof block === "object" &&
-          block !== null &&
-          (block as any).type === "text",
-      )
-      .map((block: unknown) => (block as any).text ?? "")
+      .filter((b: unknown) => typeof b === "object" && b !== null && (b as any).type === "text")
+      .map((b: unknown) => (b as any).text ?? "")
       .join("\n");
   }
 }

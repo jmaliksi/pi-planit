@@ -83,7 +83,7 @@ describe("PlanMode — tool restoration", () => {
     });
   });
 
-  describe("buildAuto", () => {
+  describe("build", () => {
     it("restores the full captured tool set", () => {
       const fullTools = [
         { name: "read" },
@@ -101,35 +101,7 @@ describe("PlanMode — tool restoration", () => {
       pm.enterPlanning(ctx);
 
       const callsBefore = mockPI.calls.length;
-      pm.buildAuto(ctx);
-
-      expect(mockPI.calls.length).toBeGreaterThan(callsBefore);
-
-      const lastCall = mockPI.calls[mockPI.calls.length - 1];
-      for (const tool of fullTools) {
-        expect(lastCall).toContain(tool.name);
-      }
-    });
-  });
-
-  describe("buildGuided", () => {
-    it("restores the full captured tool set", () => {
-      const fullTools = [
-        { name: "read" },
-        { name: "edit" },
-        { name: "write" },
-        { name: "bash" },
-        { name: "grep" },
-      ];
-      mockPI = createMockPI(fullTools);
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      pm.enterPlanning(ctx);
-
-      const callsBefore = mockPI.calls.length;
-      pm.buildGuided(ctx);
+      pm.build("auto", ctx);
 
       expect(mockPI.calls.length).toBeGreaterThan(callsBefore);
 
@@ -209,7 +181,7 @@ describe("PlanMode — Phase 5: Execution commands", () => {
       const ctx = mockPI.pi.getContext()!;
 
       pm.enterPlanning(ctx);
-      pm.buildAuto(ctx);
+      pm.build("auto", ctx);
       expect(pm.isExecuting).toBe(true);
 
       // Mock the UI context for getUiContext
@@ -265,20 +237,23 @@ describe("PlanMode — Phase 5: Execution commands", () => {
   });
 
   describe("resumePlan", () => {
-    it("notifies when no plans exist", () => {
+    it("notifies when no plans exist", async () => {
       mockPI = createMockPI();
 
       const pm = new PlanMode(mockPI.pi);
       const ctx = mockPI.pi.getContext()!;
+      const notifyMock = vi.fn();
+      (ctx as any).hasUI = true;
       (ctx as any).ui = {
-        notify: vi.fn(),
+        notify: notifyMock,
         setStatus: vi.fn(),
         setWidget: vi.fn(),
         select: vi.fn().mockResolvedValue(undefined),
       };
+      (pm as any).ui.setContext(ctx as any);
 
-      // resumePlan is async, but we can still call it
-      void pm.resumePlan(ctx);
+      await pm.resumePlan(ctx);
+      expect(notifyMock).toHaveBeenCalledWith("No plans found for this project.", "info");
     });
 
     it("loads plan from disk when UI is absent", async () => {

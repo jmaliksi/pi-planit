@@ -22,7 +22,3 @@ export interface ContextEvent {
   systemPrompt?: string;
 }
 
-export interface ToolBlockResult {
-  block: true;
-  reason: string;
-}

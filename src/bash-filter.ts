@@ -31,7 +31,6 @@ export class BashFilter {
 
     // Git read-only
     /^\s*git\s+(status|log|diff|show|branch|tag|rev-parse|describe|name-rev|for-each-ref|ls-files|shortlog|blame|annotate)\b/,
-    /^\s*git\s+show\b/,
     /^\s*git\s+diff\s+(--staged|HEAD|--cached)\b/,
 
     // Process/info
