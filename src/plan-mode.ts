@@ -14,6 +14,7 @@ import type {
 import { PlanFile } from "./plan-file";
 import { BashFilter } from "./bash-filter";
 import { PlanUI } from "./ui";
+import { agentPath } from "./path-utils";
 
 // ── Plan Mode System Prompt ──────────────────────────────────────────
 //
@@ -114,13 +115,7 @@ export class PlanMode {
     };
 
     try {
-      const configDir = path.join(
-        process.env.HOME ?? process.env.USERPROFILE ?? "/",
-        ".pi",
-        "agent",
-        "extensions",
-        "pi-planit",
-      );
+      const configDir = agentPath("extensions", "pi-planit");
       const configPath = path.join(configDir, "config.json");
 
       if (!fs.existsSync(configPath)) {
@@ -369,13 +364,8 @@ ${planContent}
       if (!data?.phase || data.phase === "idle") return;
 
       // Reconstruct plan file from persisted content
-      if (data.planContent && data.planFilePath) {
-        fs.writeFileSync(data.planFilePath, data.planContent, "utf-8");
-        this.planFile.filePath = data.planFilePath;
-        this.planFile.content = data.planContent;
-        this.planFile.parseChecklist();
-      } else if (data.planFilePath && fs.existsSync(data.planFilePath)) {
-        this.planFile.load(data.planFilePath);
+      if (data.planFilePath) {
+        this.planFile.load(data.planFilePath, data.planContent);
       } else {
         return; // No plan file to restore
       }

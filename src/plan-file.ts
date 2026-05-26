@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ChecklistItem } from "./types";
+import { agentPath } from "./path-utils";
 
 /**
  * Derive a 3-5 word filename from a user's task description.
@@ -29,11 +30,11 @@ export class PlanFile {
   private items: ChecklistItem[] = [];
 
   /**
-   * Initialize plan file in ~/.pi/agent/plans/--project-path--/ mirror structure.
+   * Initialize plan file in agent plans directory.
+   * Honors PI_CODING_AGENT_DIR env var; falls back to ~/.pi/agent/plans/.
    */
   init(cwd: string, userSummary: string = "untitled"): void {
-    const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "/";
-    const plansDir = path.join(homeDir, ".pi", "agent", "plans");
+    const plansDir = agentPath("plans");
     const sanitizedProjectPath = cwd.replace(/\//g, "--");
     const projectPlansDir = path.join(plansDir, sanitizedProjectPath);
     const planName = `${derivePlanName(userSummary)}.md`;
@@ -136,8 +137,7 @@ export class PlanFile {
    * Returns sorted array of { filename, filePath, modified } objects.
    */
   static listPlans(cwd: string): { filename: string; filePath: string; modified: Date }[] {
-    const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "/";
-    const plansDir = path.join(homeDir, ".pi", "agent", "plans");
+    const plansDir = agentPath("plans");
     const sanitizedProjectPath = cwd.replace(/\//g, "--");
     const projectPlansDir = path.join(plansDir, sanitizedProjectPath);
 
@@ -159,16 +159,23 @@ export class PlanFile {
 
   /**
    * Load an existing plan file from disk into this instance.
+   *
+   * When `content` is provided, it is used directly (bypassing disk I/O)
+   * and also written to disk to keep the file in sync.
    */
-  load(filePath: string): void {
+  load(filePath: string, content?: string): void {
     this.filePath = filePath;
-    if (fs.existsSync(filePath)) {
+
+    if (content !== undefined) {
+      this.content = content;
+      fs.writeFileSync(filePath, content, "utf-8");
+    } else if (fs.existsSync(filePath)) {
       this.content = fs.readFileSync(filePath, "utf-8");
-      this.parseChecklist();
     } else {
       this.content = "";
-      this.items = [];
     }
+
+    this.parseChecklist();
   }
 
   private updateFile(): void {
