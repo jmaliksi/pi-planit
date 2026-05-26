@@ -178,9 +178,8 @@ export class PlanFile {
       const stepMatch = line.match(/(-\s+\[([ x])\]\s+(?:Step\s+(\d+):\s*)?(.+))/);
       if (stepMatch) {
         const stepNum = stepMatch[3] ? parseInt(stepMatch[3], 10) : null;
-        const item = stepNum
-          ? this.items.find((it) => it.step === stepNum)
-          : this.items.find((it) => line.includes(it.text));
+        if (!stepNum) continue; // Require "Step N:" prefix for matching
+        const item = this.items.find((it) => it.step === stepNum);
         if (item) {
           const checkbox = item.completed ? "x" : " ";
           lines[i] = line.replace(`[${stepMatch[2]}]`, `[${checkbox}]`);

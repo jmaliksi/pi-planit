@@ -289,6 +289,7 @@ The underscore prefix convention should satisfy `noUnusedLocals`, but
 | #1 | `UiContext` hand-rolled, not from real API | Removed `UiContext`; `PlanUI` takes `hasUI` + `ExtensionUIContext` from SDK |
 | #2 | `getUiContext()` casts to inline type literal | Removed method; callers use `ctx.hasUI` and `ctx.ui` directly |
 | #3 | `(this.ui as any).setContext(ctx)` in 6 event handlers | Removed `setContext`; event handlers now use `ExtensionContext` directly |
+| #4 | `updateFile()` substring fallback causes wrong-step matches | Now requires `Step N:` prefix; skips lines without it |
 | #5 | Dead ternary in `getWidgetLines` | Removed identical branches |
 | #10 | Redundant `readFileSync` in `init()` | Removed round-trip read |
 | #11 | No-op constructor in `PlanFile` | Inlined `filePath` default |
@@ -297,6 +298,7 @@ The underscore prefix convention should satisfy `noUnusedLocals`, but
 | #17 | Over-typed `ToolBlockResult` | Inlined to type literal |
 | #18 | Verbose `extractAssistantText` | Simplified branching |
 | #19 | Silent `void` in test | Added proper assertion |
+| #20 | `_onUpdate: unknown` in `execute()` | Dropped unused `onUpdate` and `ctx` params |
 
 ## Summary
 

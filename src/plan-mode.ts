@@ -741,8 +741,6 @@ ${planContent}
         _toolCallId: string,
         params: { content: string },
         _signal: AbortSignal,
-        _onUpdate: unknown,
-        _ctx: ExtensionContext,
       ) {
         if (!pm.isPlanMode) {
           return {
