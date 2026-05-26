@@ -10,12 +10,13 @@
     "test": "vitest run"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
-  "dependencies": {},
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.75.0",
     "@earendil-works/pi-ai": "^0.75.0",
+    "@earendil-works/pi-coding-agent": "^0.75.0",
     "@earendil-works/pi-tui": "^0.75.0",
     "typebox": "^1.1.0",
     "typescript": "latest",

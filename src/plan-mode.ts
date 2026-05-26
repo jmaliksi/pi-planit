@@ -608,7 +608,7 @@ ${planContent}
     // Commands
     pi.registerCommand("planit", {
       description:
-        "Manage plan mode. Usage: /planit, /planit on, /planit off, /planit resume, /planit cancel, /planit status, /planit review",
+        "Manage plan mode. Usage: /planit, /planit on, /planit off, /planit resume, /planit cancel, /planit status, /planit review, /planit delete, /planit discard",
       handler: async (args: string, ctx: ExtensionContext) => {
         const raw = args.trim().toLowerCase();
 
@@ -669,6 +669,16 @@ ${planContent}
 
         if (raw === "review") {
           this.reviewPlan(ctx);
+          return;
+        }
+
+        if (raw === "delete") {
+          await this.deletePlan(ctx);
+          return;
+        }
+
+        if (raw === "discard") {
+          await this.discardPlan(ctx);
           return;
         }
 
@@ -770,6 +780,108 @@ ${planContent}
         };
       },
     });
+  }
+
+  // ── Plan Deletion ─────────────────────────────────────────────────
+
+  /**
+   * Show a picker of all project plans, let user select one to delete.
+   */
+  private async deletePlan(ctx: ExtensionContext): Promise<void> {
+    const plans = PlanFile.listPlans(ctx.cwd);
+
+    if (plans.length === 0) {
+      this.ui.notify("No plans found for this project.", "info", ctx.hasUI, ctx.ui);
+      return;
+    }
+
+    // If no UI, delete the most recent plan
+    if (!ctx.hasUI) {
+      const latest = plans[0];
+      fs.unlinkSync(latest.filePath);
+      this.ui.notify(`Plan deleted: ${latest.filename}`, "info", ctx.hasUI, ctx.ui);
+      return;
+    }
+
+    // Show picker menu with plan filenames
+    const options = plans.map((p) => {
+      const readable = p.filename.replace(/\.md$/, "");
+      const parts = readable.split(/-\d{4}-\d{2}-\d{2}T/);
+      const displayName = parts.length > 1 ? parts[0] : readable;
+      return `${displayName} (${new Date(p.modified).toLocaleString()})`;
+    });
+
+    const selected = await ctx.ui.select("Select plan to delete", options);
+    if (!selected) {
+      this.ui.notify("Deletion cancelled.", "info", ctx.hasUI, ctx.ui);
+      return;
+    }
+
+    const selectedIndex = options.indexOf(selected);
+    const selectedPlan = plans[selectedIndex];
+
+    // Confirm before deleting
+    const confirmed = await ctx.ui.confirm(
+      "Delete plan?",
+      `Delete "${selectedPlan.filename}"? This cannot be undone.`,
+    );
+
+    if (!confirmed) {
+      this.ui.notify("Deletion cancelled.", "info", ctx.hasUI, ctx.ui);
+      return;
+    }
+
+    fs.unlinkSync(selectedPlan.filePath);
+    this.ui.notify(`Plan deleted: ${selectedPlan.filename}`, "info", ctx.hasUI, ctx.ui);
+  }
+
+  /**
+   * Discard the currently loaded plan file. Requires confirmation in UI mode.
+   * Resets plan file to a fresh uninitialized state.
+   */
+  private async discardPlan(ctx: ExtensionContext): Promise<void> {
+    const filePath = this.planFile.getFilePath();
+
+    if (!filePath) {
+      this.ui.notify("No active plan to discard.", "info", ctx.hasUI, ctx.ui);
+      return;
+    }
+
+    // If in planning/executing mode, exit first
+    if (this.isPlanMode) {
+      this.exitPlanning(ctx);
+    } else if (this.isExecuting) {
+      this.phase = "idle";
+      if (this.restoredTools && this.restoredTools.length > 0) {
+        this.pi.setActiveTools(this.restoredTools);
+      }
+      this.restoredTools = null;
+      this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
+      this.ui.notify("Execution cancelled.", "info", ctx.hasUI, ctx.ui);
+    }
+
+    if (!ctx.hasUI) {
+      // Non-UI mode: delete without confirmation
+      fs.unlinkSync(filePath);
+      this.ui.notify(`Plan discarded: ${filePath}`, "info", ctx.hasUI, ctx.ui);
+      this.planFile = new PlanFile();
+      return;
+    }
+
+    // UI mode: confirm before deleting
+    const confirmed = await ctx.ui.confirm(
+      "Discard plan?",
+      "This will permanently remove the current plan file and cannot be undone.",
+    );
+
+    if (!confirmed) {
+      this.ui.notify("Discard cancelled.", "info", ctx.hasUI, ctx.ui);
+      return;
+    }
+
+    fs.unlinkSync(filePath);
+    this.ui.notify(`Plan discarded: ${filePath}`, "info", ctx.hasUI, ctx.ui);
+    this.planFile = new PlanFile();
   }
 
   // ── Helpers ────────────────────────────────────────────────────────

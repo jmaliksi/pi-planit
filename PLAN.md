@@ -76,14 +76,7 @@
 - `BashFilter.isSafe()` — assert DANGEROUS_PATTERNS block: `rm`, `git commit`, `npm install`, `sudo`, `mv`, file redirects (`>`)
 - Edge case: empty / whitespace-only commands allowed
 
-**Tier 2 — Integration tests** (`tests/integration/plan-mode.test.ts`): `@itzrnvr/pi-test-harness` + vitest.
-- Extension loads without errors
-- In plan mode: `write`/`edit` tools are blocked (check `t.events.blockedCalls()`)
-- In plan mode: read tools (`read`, `bash` safe commands) are NOT blocked
-- In plan mode: dangerous bash commands are blocked
-- Out of plan mode: no tools are blocked
-
-**Reference:**
+**Reference:
 - Extension factory pattern ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
 - `registerCommand`, `registerFlag`, `registerShortcut` ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#writing-an-extension))
 - Event registration (`pi.on()`) ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#events))
@@ -136,13 +129,6 @@
 - `PlanUI.showReviewMenu()` — user cancels (null) → null returned
 - `PlanUI.showPlanningWidget()` — renders checklist + file path lines correctly
 
-**Tier 2 — Integration tests** (`tests/integration/review-flow.test.ts`): pi-test-harness + vitest.
-- `/planit review` → review menu appears → "Build (auto)" → phase transitions to `executing`, full execution starts
-- `/planit review` → "Build (guided)" → phase transitions to `executing`, writes unblocked, plan injected as reference
-- `/planit review` → "Continue editing" → phase returns to `planning`, read-only restored, plan visible in widget
-- `/planit review` with no plan → notifies "No plan to review"
-- Agent writes plan while in planning → widget updates to show new plan content
-
 ---
 
 ## Phase 4: Bash Filtering ✅
@@ -172,20 +158,6 @@ Tests covered by Phase 1's `BashFilter` unit tests. Phase 4 adds expanded patter
 **References:**
 - `ctx.ui.select()` for menus ([extensions.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#custom-ui))
 - `ctx.ui.setStatus()` / `ctx.ui.setWidget()` for live progress updates
-
-**Tier 2 — Integration tests** (`tests/integration/planit-commands.test.ts`): pi-test-harness + vitest.
-- `/planit` (empty) with no plan → enters planning
-- `/planit` (empty) with plan in planning → exits to idle
-- `/planit` (empty) with plan in executing → returns to planning
-- `/planit resume` with no plans → notifies "No plans found"
-- `/planit resume` with plans → shows picker menu → loads selected plan → enters planning
-- `/planit status` in idle → notifies "OFF (YOLO mode)"
-- `/planit status` in planning → notifies "ON (read-only)" + renders widget
-- `/planit status` in executing → shows `📋 n/total` + renders widget
-- `/planit cancel` during execution → returns to planning (read-only tools restored)
-- `/planit cancel` during planning → exits to idle
-- `/planit cancel` during idle → notifies "Nothing to cancel"
-- `/planit-file` does not exist as a command (removed)
 
 ---
 
@@ -278,8 +250,7 @@ pi-planit/
 │   ├── ui.ts             # TUI menus, status, widgets, approval flow
 │   └── types.ts          # Shared types (ChecklistItem, PlanPhase, etc.)
 ├── tests/
-│   ├── unit/             # Plain vitest: BashFilter, PlanFile, derivePlanName()
-│   └── integration/      # pi-test-harness: extension hooks, tool gating, plan execution
+│   └── unit/             # Plain vitest: BashFilter, PlanFile, derivePlanName()
 ├── examples/
 │   └── test-plan.md      # Sample plan file for manual testing
 └── README.md             # Usage documentation
@@ -417,7 +388,7 @@ pi.registerCommand("planit-list", {
 
 ### 8.7 Testing
 
-**Tier 2 — Integration tests** (`tests/integration/delete-plan.test.ts`):
+**Tier 1 — Unit tests** (`tests/unit/delete-plan.test.ts`):
 - `/planit delete` with no active plan → notifies "No active plan to delete"
 - `/planit delete` while plan mode is active → notifies error, no deletion
 - `/planit delete` with active plan → confirmation dialog → file removed
