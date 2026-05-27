@@ -1,7 +1,7 @@
 # Issues — pi-planit
 
 > **Goal:** Track bugs, missing behaviors, and gaps found during extension code review against [pi.dev extension docs](https://pi.dev/docs/extensions).
-> **Last audited:** 2026-05-26
+> **Last audited:** 2026-05-27
 
 ---
 
@@ -38,12 +38,33 @@
 ## 🟠 High — Missing UI / State Visibility
 
 ### Issue 3: `/planit cancel` from executing has no widget/status update
+- **Status:** ✅ **Fixed** (2026-05-27)
+- **Flow:** `/planit cancel` while executing → `cancelPlan()` sets `phase = "planning"`, restores tools
+- **Problem:** Unlike `continueEditing()`, `cancelPlan()` doesn't call `showPlanningWidget()` or `setStatus()`. The user gets a notification but the footer widget still shows the old `📋 n/total` status, and the working indicator may linger.
+- **Per docs:** `setStatus(key, text | undefined)` and `setWidget(key, content)` should be used to update the footer.
+- **Fix:** Added `setWidget(undefined)` before `showPlanningWidget()` in `cancelPlan()` executing branch.
+
+### Issue 3b: Checkbox widget not dismissed on mode transitions (collective)
+- **Status:** ✅ **Fixed** (2026-05-27)
+- **Scope:** Checkbox widget (`planit-todos`) was not dismissed during **any** mode transition away from executing/planning.
+- **Affected methods:**
+  - `exitPlanning()` — planning → idle (`/planit off`)
+  - `onTurnEnd()` — executing → idle (all steps complete)
+  - `cancelPlan()` — executing → planning (`/planit cancel`)
+  - `resumePlan()` non-UI — executing → planning
+  - `resumePlan()` UI — executing → planning
+  - `discardPlan()` — executing → idle
+- **Fix:** Added `setWidget(undefined, ctx.hasUI, ctx.ui)` at each transition point before any subsequent widget/status call.
 - **Location:** `src/plan-mode.ts:627`
 - **Flow:** `/planit cancel` while executing → `cancelPlan()` sets `phase = "planning"`, restores tools
 - **Problem:** Unlike `continueEditing()`, `cancelPlan()` doesn't call `showPlanningWidget()` or `setStatus()`. The user gets a notification but the footer widget still shows the old `📋 n/total` status, and the working indicator may linger.
 - **Per docs:** `setStatus(key, text | undefined)` and `setWidget(key, content)` should be used to update the footer.
 
 ### Issue 4: `exitPlanning` clears status to `undefined` but doesn't clear the widget
+- **Status:** ✅ **Fixed** (2026-05-27)
+- **Flow:** `/planit off` → `exitPlanning()` → `setStatus(undefined)`
+- **Problem:** The widget (`planit-todos`) is never cleared. If the user was executing a plan with a checklist widget, that stale widget remains visible after exiting plan mode.
+- **Per docs:** `setWidget(key, undefined)` clears the widget.
 - **Location:** `src/plan-mode.ts:203`
 - **Flow:** `/planit off` → `exitPlanning()` → `setStatus(undefined)`
 - **Problem:** The widget (`planit-todos`) is never cleared. If the user was executing a plan with a checklist widget, that stale widget remains visible after exiting plan mode.
@@ -120,14 +141,15 @@
 
 ## Summary Matrix
 
-| # | Severity | Category | Issue | Location |
-|---|----------|----------|-------|----------|
-| 1 | 🔴 Critical | Agent stall | `continueEditing` doesn't resume agent | plan-mode.ts:499 |
-| 2 | 🔴 Critical | Agent stall | `resumePlan` doesn't resume agent | plan-mode.ts:567 |
-| 3 | 🟠 High | Missing UI | `cancelPlan` doesn't set widget/status | plan-mode.ts:627 |
-| 4 | 🟠 High | Missing UI | `exitPlanning` doesn't clear widget | plan-mode.ts:203 |
-| 5 | 🟠 High | Agent stall | `resumePlan` non-UI doesn't trigger agent | plan-mode.ts:536 |
-| 6 | 🟠 High | Silent fail | Executing with no steps → no prompt injected | plan-mode.ts:269 |
+| # | Severity | Category | Issue | Location | Status |
+|---|----------|----------|-------|----------|--------|
+| 1 | 🔴 Critical | Agent stall | `continueEditing` doesn't resume agent | plan-mode.ts:499 | ⏳ |
+| 2 | 🔴 Critical | Agent stall | `resumePlan` doesn't resume agent | plan-mode.ts:567 | ⏳ |
+| 3 | 🟠 High | Missing UI | `cancelPlan` doesn't set widget/status | plan-mode.ts:627 | ✅ Fixed |
+| 3b | 🟠 High | Missing UI | Checkbox widget not dismissed on mode transitions | plan-mode.ts (multiple) | ✅ Fixed |
+| 4 | 🟠 High | Missing UI | `exitPlanning` doesn't clear widget | plan-mode.ts:203 | ✅ Fixed |
+| 5 | 🟠 High | Agent stall | `resumePlan` non-UI doesn't trigger agent | plan-mode.ts:536 | ⏳ |
+| 6 | 🟠 High | Silent fail | Executing with no steps → no prompt injected | plan-mode.ts:269 | ⏳ |
 | 7 | 🟡 Medium | Missing event | No `tool_execution_start`/`end` subscription | plan-mode.ts:772 |
 | 8 | 🟡 Medium | Missing event | No `input` event subscription | plan-mode.ts |
 | 9 | 🟡 Medium | Dead data | `persistState` writes unused `restoredTools` | plan-mode.ts:381 |
@@ -140,6 +162,7 @@
 
 1. **Issues 1, 2** — Same root cause as the auto-build fix. Add `sendUserMessage()` calls to resume the agent.
 2. **Issue 6** — Prevents execution from working at all when steps are missing.
-3. **Issues 3, 4** — UI inconsistency that confuses users.
-4. **Issue 10** — Race condition that could silently break the review flow.
-5. **Issues 11, 12** — Non-UX improvements for headless/CI use cases.
+3. **Issue 10** — Race condition that could silently break the review flow.
+4. **Issues 11, 12** — Non-UX improvements for headless/CI use cases.
+
+> **Fixed:** Issues 3, 3b, 4 (checkbox widget dismissal across all mode transitions, 2026-05-27).

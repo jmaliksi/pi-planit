@@ -227,6 +227,7 @@ export class PlanMode {
     }
     this.restoredTools = null;
 
+    this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
     this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
     this.ui.notify("Plan mode disabled. Tools restored.", "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
@@ -348,6 +349,7 @@ ${planContent}
 
     if (completed === total) {
       this.phase = "idle";
+      this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
       this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
       this.ui.notify("All plan steps complete.", "info", ctx.hasUI, ctx.ui);
     }
@@ -565,6 +567,7 @@ ${planContent}
         this.pi.setActiveTools(readOnlyTools);
       }
       this.phase = "planning";
+      this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
       this.ui.setStatus("⏸ plan (restored)", ctx.hasUI, ctx.ui);
       this.ui.showPlanningWidget(
         this.planFile.getFilePath(),
@@ -602,6 +605,7 @@ ${planContent}
         this.pi.setActiveTools(this.restoredTools);
       }
       this.restoredTools = null;
+      this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
       this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
       this.ui.notify("Execution cancelled.", "info", ctx.hasUI, ctx.ui);
     }
@@ -616,6 +620,7 @@ ${planContent}
       this.pi.setActiveTools(readOnlyTools);
     }
     this.phase = "planning";
+    this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
     this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
     this.ui.showPlanningWidget(
       this.planFile.getFilePath(),
@@ -640,6 +645,7 @@ ${planContent}
       if (readOnlyTools.length > 0) {
         this.pi.setActiveTools(readOnlyTools);
       }
+      this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
       this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
       this.ui.showPlanningWidget(
         this.planFile.getFilePath(),
@@ -929,6 +935,7 @@ ${planContent}
         this.pi.setActiveTools(this.restoredTools);
       }
       this.restoredTools = null;
+      this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
       this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
       this.ui.notify("Execution cancelled.", "info", ctx.hasUI, ctx.ui);
     }
