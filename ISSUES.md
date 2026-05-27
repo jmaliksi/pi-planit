@@ -1,310 +1,145 @@
-# Code Quality Audit
+# Issues — pi-planit
 
-## 🔴 Critical / Logic Bugs
-
-### 1. `ui.ts` — `UiContext` type is fabricated, not from the real API
-
-The `UiContext` interface in `ui.ts` is hand-rolled and almost certainly doesn't
-match the real `ExtensionContext` shape. The actual usage of `getUiContext()` in
-`plan-mode.ts` uses a `as any` cast that returns an even more hand-rolled type
-with a completely different signature for `select` (takes `title, options` vs
-`title, options` but the types are duplicated and divergent). This means the
-`PlanUI` class and `getUiContext()` are talking to each other over a type-less
-bridge. If the real API changes, nothing catches it.
-
-**Location:** `src/ui.ts`, `src/plan-mode.ts:getUiContext()`
+> **Goal:** Track bugs, missing behaviors, and gaps found during extension code review against [pi.dev extension docs](https://pi.dev/docs/extensions).
+> **Last audited:** 2026-05-26
 
 ---
 
-### 2. `plan-mode.ts` — `getUiContext()` returns `ctx` cast as a completely different shape
+## 🔴 Critical — Agent Loop Stalls
 
-```ts
-private getUiContext(ctx: ExtensionContext) {
-    const c = ctx as any;
-    return c as { hasUI: boolean; ui: { ...very long inline type... } };
-}
-```
+### Issue 1: `continueEditing` transitions to planning but never resumes the agent
+- **Location:** `src/plan-mode.ts:499`
+- **Flow:** `/planit review` → "↻ Continue editing" → `continueEditing()` sets `phase = "planning"`, restores read-only tools
+- **Problem:** This path is called from `onAgentEnd`, meaning the agent has already finished its turn. After the dialog closes, the agent sits idle — no new turn is triggered. Same bug class as the auto-build `sendUserMessage()` fix.
+- **Per docs:** The `sendUserMessage` API is the documented way to trigger a new turn from an extension context. The agent loop doesn't auto-resume after `ui.select()`/`ui.editor()` dialogs.
+- **Fix:** After setting up planning UI, call:
+  ```ts
+  this.pi.sendUserMessage(
+    "The plan is ready for editing. Explore the codebase and revise the plan.",
+    { deliverAs: "followUp" },
+  );
+  ```
 
-This is the worst anti-pattern in the codebase. It casts to `any` then casts
-again to an inline type literal that duplicates the `UiContext` interface from
-`ui.ts`. Three copies of the same shape. If any change, it silently breaks at
-runtime.
-
-**Location:** `src/plan-mode.ts`
-
----
-
-### 3. `plan-mode.ts` — `(this.ui as any).setContext(ctx)` sprinkled everywhere
-
-The UI context is set with `as any` in every event handler
-(`tool_call`, `session_start`, `session_shutdown`, `turn_end`, `session_tree`).
-This is because the event signatures from the SDK don't include the UI context,
-so `PlanUI.setContext()` expects a different shape. Every single one silently
-bypasses type checking. That's 6 instances of the same hack.
-
-**Locations:** `src/plan-mode.ts` — `register()` event handler section
-
----
-
-### 4. `plan-file.ts` — `updateFile()` uses text matching as a fallback for step lookup
-
-```ts
-const item = stepNum
-  ? this.items.find((it) => it.step === stepNum)
-  : this.items.find((it) => line.includes(it.text));
-```
-
-When a step line lacks `Step N:` prefix, it falls back to
-`line.includes(it.text)` — a substring match. Two steps with overlapping text
-(e.g., "Fix auth" and "Fix auth module") will resolve to the wrong item. This is
-a correctness bug waiting to happen.
-
-**Location:** `src/plan-file.ts:updateFile()`
+### Issue 2: `resumePlan` loads a plan but doesn't start a new agent turn
+- **Location:** `src/plan-mode.ts:567`
+- **Flow:** `/planit resume` → picker → loads plan file → sets `phase = "planning"` → shows widget
+- **Problem:** The `session_tree` handler fires when the user navigates `/tree`. After navigation, the agent is idle. The restored planning state is invisible to the agent unless a new turn is triggered. The user sees the widget but the agent does nothing until they type something.
+- **Per docs:** `before_agent_start` is the right hook for injecting context, but the agent must first enter a turn.
+- **Fix:** After restoring planning state, call:
+  ```ts
+  this.pi.sendUserMessage(
+    "Plan restored: " + title,
+    { deliverAs: "followUp" },
+  );
+  ```
 
 ---
 
-### 5. `plan-file.ts` — `getWidgetLines()` produces identical text for completed and incomplete
+## 🟠 High — Missing UI / State Visibility
 
-```ts
-const text = item.completed ? `[${item.step}] ${item.text}` : `[${item.step}] ${item.text}`;
-```
+### Issue 3: `/planit cancel` from executing has no widget/status update
+- **Location:** `src/plan-mode.ts:627`
+- **Flow:** `/planit cancel` while executing → `cancelPlan()` sets `phase = "planning"`, restores tools
+- **Problem:** Unlike `continueEditing()`, `cancelPlan()` doesn't call `showPlanningWidget()` or `setStatus()`. The user gets a notification but the footer widget still shows the old `📋 n/total` status, and the working indicator may linger.
+- **Per docs:** `setStatus(key, text | undefined)` and `setWidget(key, content)` should be used to update the footer.
 
-The `text` variable is identical for both branches. The only difference is the
-checkbox prefix. The ternary is dead code.
+### Issue 4: `exitPlanning` clears status to `undefined` but doesn't clear the widget
+- **Location:** `src/plan-mode.ts:203`
+- **Flow:** `/planit off` → `exitPlanning()` → `setStatus(undefined)`
+- **Problem:** The widget (`planit-todos`) is never cleared. If the user was executing a plan with a checklist widget, that stale widget remains visible after exiting plan mode.
+- **Per docs:** `setWidget(key, undefined)` clears the widget.
 
-**Location:** `src/plan-file.ts:getWidgetLines()`
-
----
-
-## 🟠 Structural Issues
-
-### 6. `plan-mode.ts` is a 500+ line god class
-
-It manages: config loading, tool gating, bash filtering, UI rendering, state
-persistence, session lifecycle, system prompt injection, plan file I/O, command
-routing, and agent execution coordination. The `register()` method alone is ~80
-lines of command routing. This should be split into at least 3-4 classes (e.g.,
-`PlanCommandRouter`, `PhaseManager`, `PlanPersistence`).
-
-**Location:** `src/plan-mode.ts`
+### Issue 5: `resumePlan` (no-UI fallback) doesn't restore the widget/status
+- **Location:** `src/plan-mode.ts:536`
+- **Flow:** `/planit resume` with `ctx.hasUI === false` → loads plan → enters planning
+- **Problem:** In print/RPC mode, the code sets `phase = "planning"` and calls `showPlanningWidget` but passes `hasUI: false` so it's a no-op. That's fine, but the agent is never kicked off to process the loaded plan. Same root cause as Issue 2.
 
 ---
 
-### 7. Command routing is a switch-if cascade in `register()`
+## 🟠 High — `before_agent_start` Edge Case
 
-```ts
-if (raw.length === 0) { ... }
-if (["on", "enable", "start"].includes(raw)) { ... }
-if (["off", "disable", "stop", "exit"].includes(raw)) { ... }
-```
-
-This is fine for now but is a maintenance hazard. A proper command registry with
-argument parsing would be cleaner. Not terrible, but brittle.
-
-**Location:** `src/plan-mode.ts:register()`
-
----
-
-### 8. `plan-mode.ts` — `PLAN_MODE_SYSTEM_PROMPT` is a 60-line template string
-
-It's embedded directly in the source file as a multi-line template string. Any
-change requires scrolling past 30 lines of code to see it. Consider extracting
-to a separate file or constant.
-
-**Location:** `src/plan-mode.ts`
+### Issue 6: Executing phase with no steps returns `undefined`, silently doing nothing
+- **Location:** `src/plan-mode.ts:269-272`
+- **Flow:** Agent is in executing phase → next turn starts → `onBeforeAgentStart` checks `this.planFile.hasSteps()` → if `false`, returns `undefined`
+- **Problem:** The system prompt injected by this handler contains the approved plan, step instructions, and `[DONE:n]` requirements. Without it, the agent has no idea it's supposed to be executing anything. It will just respond normally, ignore the plan, and the user sees no `[DONE:n]` markers. This is a silent failure path.
+- **Trigger:** If the agent deletes or truncates the plan file while executing, or if `parseChecklist()` fails to match the step format.
+- **Fix:** When `phase === "executing"` and `!planFile.hasSteps()`, return an error prompt like:
+  ```
+  The approved plan has no steps. Review the plan file and either create steps or cancel execution.
+  ```
+  Or transition to a more appropriate phase (e.g., idle).
 
 ---
 
-### 9. `bash-filter.ts` — dangerous pattern `/>\\s*\\S/` is too broad
+## 🟡 Medium — Event Handling Gaps
 
-This blocks any `>` followed by a non-whitespace character. It would block things
-like:
+### Issue 7: `tool_execution_start` / `tool_execution_end` events not subscribed
+- **Location:** `src/plan-mode.ts:772-778` (registration section)
+- **Problem:** The extension subscribes to `tool_call` but not to `tool_execution_start` or `tool_execution_end`. If the user wants to track tool execution progress during auto-build, they can't. This is minor since `turn_end` already tracks `[DONE:n]`, but it means the extension can't distinguish between a tool call being preflighted vs actually executing.
+- **Per docs:** These events are available and fire before/after each tool execution.
 
-- `ls > /dev/null` — a legitimate pattern (though you'd want to block file writes
-  in plan mode)
-- `echo "a > b" | grep c` — string literals containing `>`
-- `cat file | tee >(sort)` — process substitution
-
-The safe patterns also have a problem: `/--help\\b/` and `\\s-h\\b` match
-*anywhere* in the command, not just at the start. So
-`some-weird-tool --help` passes as "safe" even though
-`some-weird-tool` isn't whitelisted. The dangerous check runs first, so this is a
-false-positive pass, not a security issue, but it means the "whitelist" isn't
-actually a whitelist.
-
-**Location:** `src/bash-filter.ts:DANGEROUS_PATTERNS`, `SAFE_PATTERNS`
+### Issue 8: `input` event not subscribed
+- **Location:** `src/plan-mode.ts`
+- **Problem:** The extension doesn't subscribe to the `input` event. This means it can't intercept or transform user messages before the agent sees them. For example, if the user types `/planit` during agent execution, the current code checks `this.isExecuting` in the command handler, but an `input` handler could provide earlier interception (e.g., auto-cancel, or transforming `/planit` into a custom message).
+- **Per docs:** `input` fires after extension commands are checked but before skill/template expansion. Returning `{ action: "handled" }` skips the agent entirely.
 
 ---
 
-## 🟡 Code Smells
+## 🟡 Medium — State Management Issues
 
-### 10. `plan-file.ts` — `init()` writes then immediately re-reads
+### Issue 9: `persistState` serializes `restoredTools` but `restoreState` doesn't use it
+- **Location:** `src/plan-mode.ts:381` vs `389-419`
+- **Problem:** `persistState` writes `restoredTools` to the session entry. `restoreState` ignores the persisted value and calls `this.pi.getAllTools()` to re-capture the current tool set. This is actually a conscious design (stale persisted tools could differ from current session tools), but it means `restoredTools` in the persisted state is dead data. The comment in `restoreState` says "Capture the current session's tool set (not stale persisted ones)" — so this is intentional, but misleading.
+- **Severity:** Low. No functional bug, just confusing.
 
-```ts
-fs.writeFileSync(planPath, this.content, "utf-8");
-this.content = fs.readFileSync(planPath, "utf-8");
-```
-
-There's no reason for the round-trip. `this.content` already has the template.
-This is a defensive read that serves no purpose.
-
-**Location:** `src/plan-file.ts:init()`
-
----
-
-### 11. `plan-file.ts` — `constructor()` initializes `this.filePath = ""` but it's immediately overwritten by `init()`
-
-```ts
-constructor() {
-    this.filePath = "";
-}
-```
-
-The constructor is a no-op. The `filePath` default should just be inline:
-`private filePath: string = "";`
-
-**Location:** `src/plan-file.ts:constructor()`
+### Issue 10: `reviewPending` flag has a race condition
+- **Location:** `src/plan-mode.ts:107, 359, 468`
+- **Problem:** `reviewPending` is set to `true` in `reviewPlan()` and cleared in `onAgentEnd()`. But `onAgentEnd` fires for *every* agent end, not just the one after writing a plan. If the agent ends a turn for any other reason (e.g., user sent a follow-up, or the agent hit max turns), `reviewPending` would be cleared prematurely. If the agent then writes a plan in a subsequent turn, `reviewPending` would be `false` so `onAgentEnd` would return early and never show the review menu.
+- **Trigger:** User types a follow-up message while plan is being written.
+- **Fix:** Set `reviewPending` closer to the event that triggers plan writing (e.g., in `write_plan` tool execution, or check `planFile.hasSteps()` in `onAgentEnd` instead of relying on the flag).
 
 ---
 
-### 12. `plan-mode.ts` — `buildAuto()` and `buildGuided()` are identical except for one string
+## 🟢 Low — Cosmetic / DX
 
-```ts
-private buildAuto(ctx) {
-    this.buildMode = "auto";
-    // ...same 5 lines...
-}
-private buildGuided(ctx) {
-    this.buildMode = "guided";
-    // ...same 5 lines...
-}
-```
+### Issue 11: Non-UI mode auto-approves with `buildAuto` instead of notifying user
+- **Location:** `src/ui.ts:50-52`
+- **Problem:** In print/RPC mode (`hasUI === false`), `showReviewMenu()` returns `buildAuto` and calls `notify()` — which is also a no-op in non-UI mode. So the user gets no feedback at all that the plan was auto-approved. They just see the agent start executing.
+- **Per docs:** In non-UI mode, the extension should at minimum log to console. Currently it only calls `this.ui.notify()` which silently returns.
 
-These should be one method: `build(mode: "auto" | "guided")`.
+### Issue 12: `showReviewMenu` doesn't show the plan in non-UI mode
+- **Location:** `src/ui.ts:48-53`
+- **Problem:** In non-UI mode, the plan content is never shown to the user. It just auto-approves. In a headless context, there's no way to review the plan.
+- **Suggestion:** Log the plan content to stdout or `console.log` before auto-approving.
 
-**Location:** `src/plan-mode.ts`
-
----
-
-### 13. `bash-filter.ts` — `SAFE_PATTERNS` has a duplicate `git show` entry
-
-```ts
-/^\s*git\s+(status|log|diff|show|branch|tag|rev-parse|...)\b/,
-/^\s*git\s+show\b/,  // redundant — already covered above
-```
-
-**Location:** `src/bash-filter.ts:SAFE_PATTERNS`
+### Issue 13: Widget key `"planit-todos"` is hardcoded
+- **Location:** `src/ui.ts:19`
+- **Problem:** The widget key is hardcoded. If multiple instances of the extension were somehow loaded, they'd conflict. Minor, since there's only one instance.
 
 ---
 
-### 14. `bash-filter.ts` — `du` and `df` are not read-only
+## Summary Matrix
 
-`du` can be very expensive and block an AI agent session for a long time on large
-repos. `df` is read-only but irrelevant to code work. Including them in the
-whitelist is questionable.
+| # | Severity | Category | Issue | Location |
+|---|----------|----------|-------|----------|
+| 1 | 🔴 Critical | Agent stall | `continueEditing` doesn't resume agent | plan-mode.ts:499 |
+| 2 | 🔴 Critical | Agent stall | `resumePlan` doesn't resume agent | plan-mode.ts:567 |
+| 3 | 🟠 High | Missing UI | `cancelPlan` doesn't set widget/status | plan-mode.ts:627 |
+| 4 | 🟠 High | Missing UI | `exitPlanning` doesn't clear widget | plan-mode.ts:203 |
+| 5 | 🟠 High | Agent stall | `resumePlan` non-UI doesn't trigger agent | plan-mode.ts:536 |
+| 6 | 🟠 High | Silent fail | Executing with no steps → no prompt injected | plan-mode.ts:269 |
+| 7 | 🟡 Medium | Missing event | No `tool_execution_start`/`end` subscription | plan-mode.ts:772 |
+| 8 | 🟡 Medium | Missing event | No `input` event subscription | plan-mode.ts |
+| 9 | 🟡 Medium | Dead data | `persistState` writes unused `restoredTools` | plan-mode.ts:381 |
+| 10 | 🟡 Medium | Race condition | `reviewPending` cleared prematurely | plan-mode.ts:107 |
+| 11 | 🟢 Low | UX | Non-UI auto-approve silently does nothing | ui.ts:50 |
+| 12 | 🟢 Low | UX | Non-UI mode never shows plan content | ui.ts:48 |
+| 13 | 🟢 Low | DX | Hardcoded widget key | ui.ts:19 |
 
-**Location:** `src/bash-filter.ts:SAFE_PATTERNS`
+## Priority Ordering for Fixes
 
----
-
-### 15. `plan-mode.ts` — `onTurnEnd` does regex matching on raw message text
-
-```ts
-const doneMatches = text.match(/\[DONE:(\d+)\]/g);
-```
-
-This means the agent has to emit the exact magic string `[DONE:n]` in its
-response. There's no structure here — it's grep-based protocol. Fragile and
-invisible to type checking.
-
-**Location:** `src/plan-mode.ts:onTurnEnd()`
-
----
-
-### 16. `plan-mode.ts` — `persistState` serializes the full plan content into session entries
-
-Every state transition writes the entire plan markdown to the session log. For a
-50-step plan with detailed descriptions, this bloats the session memory. Consider
-whether this is necessary or if just the file path + phase is sufficient.
-
-**Location:** `src/plan-mode.ts:persistState()`
-
----
-
-## 🟢 Minor
-
-### 17. `types.ts` — `ToolBlockResult` is over-typed
-
-```ts
-export interface ToolBlockResult {
-    block: true;
-    reason: string;
-}
-```
-
-This can just be `{ block: true; reason: string }`. No one extends this interface.
-
-**Location:** `src/types.ts`
-
----
-
-### 18. `plan-mode.ts` — `extractAssistantText` does the same thing twice in slightly different ways
-
-The `typeof msg.content === "string"` branch and the array branch could be
-unified. Not wrong, just verbose.
-
-**Location:** `src/plan-mode.ts:extractAssistantText()`
-
----
-
-### 19. Tests — `resumePlan` test uses `void` to silence a promise
-
-```ts
-void pm.resumePlan(ctx);
-```
-
-This is a test that doesn't actually verify anything. The `void` swallows errors.
-
-**Location:** `test/plan-mode.test.ts`
-
----
-
-### 20. `tsconfig.json` — `noUnusedLocals: true` is set but `plan-mode.ts` has unused parameters
-
-```ts
-async execute(_toolCallId: string, params: { content: string }, _signal: AbortSignal, _onUpdate: unknown, _ctx: ExtensionContext)
-```
-
-The underscore prefix convention should satisfy `noUnusedLocals`, but
-`_onUpdate: unknown` is a bit loose — it could be typed properly.
-
-**Location:** `tsconfig.json`, `src/plan-mode.ts`
-
----
-
-## Resolved
-
-| # | Issue | Fix |
-|---|-------|-----|
-| #1 | `UiContext` hand-rolled, not from real API | Removed `UiContext`; `PlanUI` takes `hasUI` + `ExtensionUIContext` from SDK |
-| #2 | `getUiContext()` casts to inline type literal | Removed method; callers use `ctx.hasUI` and `ctx.ui` directly |
-| #3 | `(this.ui as any).setContext(ctx)` in 6 event handlers | Removed `setContext`; event handlers now use `ExtensionContext` directly |
-| #4 | `updateFile()` substring fallback causes wrong-step matches | Now requires `Step N:` prefix; skips lines without it |
-| #5 | Dead ternary in `getWidgetLines` | Removed identical branches |
-| #10 | Redundant `readFileSync` in `init()` | Removed round-trip read |
-| #11 | No-op constructor in `PlanFile` | Inlined `filePath` default |
-| #12 | Duplicate `buildAuto`/`buildGuided` | Merged into `build(mode)` |
-| #13 | Duplicate `git show` regex | Removed redundant pattern |
-| #17 | Over-typed `ToolBlockResult` | Inlined to type literal |
-| #18 | Verbose `extractAssistantText` | Simplified branching |
-| #19 | Silent `void` in test | Added proper assertion |
-| #20 | `_onUpdate: unknown` in `execute()` | Dropped unused `onUpdate` and `ctx` params |
-
-## Summary
-
-| Severity   | Count |
-|------------|-------|
-| 🔴 Critical | 5     |
-| 🟠 Structural | 9   |
-| 🟡 Smells  | 6     |
-| 🟢 Minor   | 4     |
+1. **Issues 1, 2** — Same root cause as the auto-build fix. Add `sendUserMessage()` calls to resume the agent.
+2. **Issue 6** — Prevents execution from working at all when steps are missing.
+3. **Issues 3, 4** — UI inconsistency that confuses users.
+4. **Issue 10** — Race condition that could silently break the review flow.
+5. **Issues 11, 12** — Non-UX improvements for headless/CI use cases.

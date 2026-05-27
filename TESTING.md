@@ -32,41 +32,41 @@ These each test a single, self-contained concern.
 
 ## C. Mode Toggle → Config
 
-| # | Check | Prerequisite |
-|---|-------|-------------|
-| C1 | `/planit` in idle → enters planning mode, switches to read-only tools, shows "⏸ plan" status | A1 |
-| C2 | `/planit` in planning → exits plan mode, restores original tools, shows "Plan mode disabled" | C1 |
-| C3 | `/planit toggle` (same as bare `/planit`) toggles idle ↔ planning | C1→C2 |
-| C4 | `/planit on` / `/planit enable` → enters planning | C1 |
-| C5 | `/planit off` / `/planit disable` / `/planit stop` / `/planit exit` → exits planning | C2 |
-| C6 | `--planit` flag → enters planning mode on session start (no `/planit` command needed) | A1 |
-| C7 | Configurable tools: adding a tool name to `allowedTools` in config includes it in plan mode | C1 |
+| # | Check | Prerequisite | Verified |
+|---|-------|-------------|---|
+| C1 | `/planit` in idle → enters planning mode, switches to read-only tools, shows "⏸ plan" status | A1 | o |
+| C2 | `/planit` in planning → exits plan mode, restores original tools, shows "Plan mode disabled" | C1 | o |
+| C3 | `/planit toggle` (same as bare `/planit`) toggles idle ↔ planning | C1→C2 | o |
+| C4 | `/planit on` / `/planit enable` → enters planning | C1 | o |
+| C5 | `/planit off` / `/planit disable` / `/planit stop` / `/planit exit` → exits planning | C2 | o |
+| C6 | `--planit` flag → enters planning mode on session start (no `/planit` command needed) | A1 | o |
+| C7 | Configurable tools: adding a tool name to `allowedTools` in config includes it in plan mode | C1 | ? |
 
 ---
 
 ## D. Plan Creation → Display
 
-| # | Check | Prerequisite |
-|---|-------|-------------|
-| D1 | Agent calls `write_plan` with content → file created | C1 (must be in planning mode) |
-| D2 | Plan file created at `~/.pi/agent/plans/--project-path--/<name-timestamp>.md` | D1 |
-| D3 | Checklist parsing correctly identifies `- [ ]` and `- [x]` items with step numbers | D1 |
-| D4 | Widget shows checklist (☐/☑ prefix) + file path during planning | D1 |
-| D5 | `derivePlanName()` produces 3–5 word hyphenated filename with timestamp | Unit test already covers this |
+| # | Check | Prerequisite | Verified |
+|---|-------|-------------|---|
+| D1 | Agent calls `write_plan` with content → file created | C1 (must be in planning mode) | o |
+| D2 | Plan file created at `~/.pi/agent/plans/--project-path--/<name-timestamp>.md` | D1 | o |
+| D3 | Checklist parsing correctly identifies `- [ ]` and `- [x]` items with step numbers | D1 | o |
+| D4 | Widget shows checklist (☐/☑ prefix) + file path during planning | D1 | o |
+| D5 | `derivePlanName()` produces 3–5 word hyphenated filename with timestamp | Unit test already covers this | o |
 
 ---
 
 ## E. Review Flow
 
-| # | Check | Prerequisite |
-|---|-------|-------------|
-| E1 | `/planit review` with no plan → "No plan to review" | None |
-| E2 | `/planit review` with plan → shows plan content in scrollable editor + build mode picker | D4 |
-| E3 | "↺ Build (auto)" → enters executing phase, full execution, `[DONE:n]` tracking in system prompt | E2 |
-| E4 | "✓ Build (guided)" → enters executing, writes enabled, plan as reference (not hard constraint) | E2 |
-| E5 | "↻ Continue editing" → back to planning mode, read-only tools restored | E2 |
-| E6 | No auto-menu on `agent_end` (review must be explicit via `/planit review`) | None |
-| E7 | Non-UI mode (`ctx.hasUI === false`) → auto-approves with "buildAuto" | E2 |
+| # | Check | Prerequisite | Verified |
+|---|-------|-------------|---|
+| E1 | `/planit review` with no plan → "No plan to review" | None | o |
+| E2 | `/planit review` with plan → shows plan content in scrollable editor + build mode picker | D4 | o |
+| E3 | "↺ Build (auto)" → enters executing phase, full execution, `[DONE:n]` tracking in system prompt | E2 | x |
+| E4 | "✓ Build (guided)" → enters executing, writes enabled, plan as reference (not hard constraint) | E2 | o |
+| E5 | "↻ Continue editing" → back to planning mode, read-only tools restored | E2 | need to hide checkboxes |
+| E6 | No auto-menu on `agent_end` (review must be explicit via `/planit review`) | None | o |
+| E7 | Non-UI mode (`ctx.hasUI === false`) → auto-approves with "buildAuto" | E2 | ? |
 
 ---
 
@@ -85,29 +85,29 @@ These each test a single, self-contained concern.
 
 ## G. Resume, Cancel, Delete
 
-| # | Check | Prerequisite |
-|---|-------|-------------|
-| G1 | `/planit resume` with no plans → "No plans found" | None |
-| G2 | `/planit resume` with plans → picker menu, loads selected plan into planning | D1 (has at least one plan) |
-| G3 | `/planit cancel` in executing → returns to planning, read-only tools | E3 |
-| G4 | `/planit cancel` in planning → exits plan mode (same as `off`) | C1 |
-| G5 | `/planit cancel` in idle → "Nothing to cancel" | C2 |
-| G6 | `/planit delete` → plan picker → confirmation dialog → file removed | D1 |
-| G7 | `/planit delete` with no plans → "No plans found" | None |
-| G8 | `/planit discard` → exits mode, deletes current plan, resets state | D1 |
+| # | Check | Prerequisite | Verified |
+|---|-------|-------------|---|
+| G1 | `/planit resume` with no plans → "No plans found" | None | o |
+| G2 | `/planit resume` with plans → picker menu, loads selected plan into planning | D1 (has at least one plan) | o |
+| G3 | `/planit cancel` in executing → returns to planning, read-only tools | E3 | o |
+| G4 | `/planit cancel` in planning → exits plan mode (same as `off`) | C1 | o |
+| G5 | `/planit cancel` in idle → "Nothing to cancel" | C2 | o |
+| G6 | `/planit delete` → plan picker → confirmation dialog → file removed | D1 | o |
+| G7 | `/planit delete` with no plans → "No plans found" | None | o |
+| G8 | `/planit discard` → exits mode, deletes current plan, resets state | D1 | o |
 
 ---
 
 ## H. Edge Cases & Robustness
 
-| # | Check | How |
-|---|-------|-----|
-| H1 | Session persistence: exit plan mode mid-execution → restart → state restored with progress intact | E3, then kill pi, restart |
-| H2 | `session_tree` handler: navigate `/tree` → state restored | E3 or C1 |
-| H3 | Works in `-p` (print) mode → non-UI fallback (auto-approve in review, auto-resume latest plan) | Test with headless invocation |
-| H4 | Toggle while already in same mode → idempotent notification ("Plan mode is already enabled") | C1, run `/planit` again |
-| H5 | `/planit review` while executing → should navigate to review first (executing → idle path via resume/cancel) | E3 |
-| H6 | Concurrent tool calls during `tool_call` event → gating still works correctly | E3, observe tool call log |
+| # | Check | How | Verified |
+|---|-------|-----|---|
+| H1 | Session persistence: exit plan mode mid-execution → restart → state restored with progress intact | E3, then kill pi, restart | |
+| H2 | `session_tree` handler: navigate `/tree` → state restored | E3 or C1 | x |
+| H3 | Works in `-p` (print) mode → non-UI fallback (auto-approve in review, auto-resume latest plan) | Test with headless invocation | |
+| H4 | Toggle while already in same mode → idempotent notification ("Plan mode is already enabled") | C1, run `/planit` again | |
+| H5 | `/planit review` while executing → should navigate to review first (executing → idle path via resume/cancel) | E3 | |
+| H6 | Concurrent tool calls during `tool_call` event → gating still works correctly | E3, observe tool call log | |
 
 ---
 

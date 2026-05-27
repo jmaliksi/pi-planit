@@ -126,7 +126,7 @@ Copy the `dist` output to your pi installation's extension directory, or add the
 
 ```bash
 # All tests (vitest, flat in test/)
-npx vitest run
+npm run test
 ```
 
 ### File Structure

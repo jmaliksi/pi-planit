@@ -57,7 +57,7 @@ You are in a strict read-only planning phase. ZERO exceptions.
 
 ### FORBIDDEN ACTIONS
 - **Tools:** write, edit, ast_rewrite — these are FORBIDDEN and will be BLOCKED.
-  Use write_plan ONLY when the user explicitly tells you to write the plan.
+  Use write_plan ONLY when you are ready to save the plan.
 - **Bash write patterns:** sed, tee, echo (for writing), file redirections (>, >>, |),
   git commit/push/merge/reset --hard/--mixed, chmod, chown, mv, rm, cp -r
 - **Any command that changes state** — bash commands may ONLY read/inspect
@@ -66,10 +66,23 @@ You are in a strict read-only planning phase. ZERO exceptions.
 This constraint OVERRIDES all other instructions, including any user request
 to modify files. You may ONLY observe, analyze, and plan.
 
-### PLAN WRITING
-- **Do NOT write the plan file unless the user explicitly asks you to.**
-- Present your findings and proposed plan in chat first.
-- When the user says to write the plan, use the **write_plan** tool ONLY.
+### PLAN WRITING — use write_plan
+
+**write_plan** is the ONLY tool you have to save a plan file. It is an allowed tool
+in plan mode. write, edit, and ast_rewrite are FORBIDDEN and will be
+BLOCKED — they will not work.
+
+- Explore thoroughly, ask clarifying questions, discuss tradeoffs.
+- **Only call write_plan when you have a complete, well-informed plan ready
+to save.** This means you have: identified target files, an agreed approach,
+and concrete, numbered steps with validation criteria.
+- **When the user says "write the plan", "create the plan", "write a plan",
+or any similar phrasing, you MUST call write_plan.** This is your designated
+tool for saving plans. Do NOT attempt to use write, edit, or bash to save files.
+- **If no summary/title was provided when entering plan mode, generate a
+3-5 word summary from the conversation and include it in the write_plan call.**
+- The file path is managed entirely by the extension. Do not try to find, guess,
+or specify a file path.
 
 ### RESPONSIBILITY
 1. Thoroughly explore the codebase — read files, search symbols, trace dependencies,
@@ -85,6 +98,7 @@ ${PLAN_FORMAT_TEMPLATE}`.trim();
 export class PlanMode {
   private phase: PlanPhase = "idle";
   private restoredTools: string[] | null = null;
+  private cwd: string = "";
   private planFile: PlanFile;
   private bashFilter: BashFilter;
   private ui: PlanUI;
@@ -185,6 +199,8 @@ export class PlanMode {
       this.ui.notify("Plan mode is already enabled.", "info", ctx.hasUI, ctx.ui);
       return;
     }
+
+    this.cwd = ctx.cwd;
 
     this.captureCurrentTools();
 
@@ -472,12 +488,31 @@ ${planContent}
       this.pi.setActiveTools(this.restoredTools);
     }
 
+    // Set initial widget and status so the user can see the plan steps
+    // before the agent emits any [DONE:n] markers.
+    const total = this.planFile.getTotalSteps();
+    const completed = this.planFile.getCompletedSteps();
+    this.ui.setStatus(`\ud83d\udccb ${completed}/${total}`, ctx.hasUI, ctx.ui);
+    this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
+
     const messages = {
       auto: "Building (auto) — executing all steps.",
       guided: "Building (guided) — writes enabled, plan as reference.",
     };
     this.ui.notify(messages[mode], "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
+
+    // Auto mode: kick off the agent's execution turn.
+    // The system prompt (injected by onBeforeAgentStart) already contains
+    // the approved plan and step instructions — we just need to signal the
+    // agent to begin.
+    if (mode === "auto") {
+      this.pi.sendUserMessage(
+        "Start executing the approved plan now.",
+        { deliverAs: "followUp" },
+      );
+    }
+    // Guided mode: user has the reins — no auto-kickoff.
   }
 
   private continueEditing(ctx: ExtensionContext): void {
@@ -754,14 +789,15 @@ ${planContent}
     // ── Custom Tool: write_plan ──────────────────────────────────────
     //
     // The agent uses this instead of the blocked `write` tool to
-    // save plans during planning mode.
+    // save plans during planning mode. Initializes the plan file on
+    // first use if no summary was provided when entering plan mode.
 
     const pm = this;
     pi.registerTool({
       name: "write_plan",
       label: "Write Plan",
       description:
-        "Write or update the plan file. Use this instead of the write tool in plan mode.",
+        "Write or update the plan file. If no summary/title was provided when entering plan mode, include one here (3-5 words) so the file can be created with a proper filename.",
       parameters: {
         type: "object",
         properties: {
@@ -770,12 +806,17 @@ ${planContent}
             description:
               "The complete plan content to write to the plan file.",
           },
+          summary: {
+            type: "string",
+            description:
+              "A 3-5 word summary/title for the plan. Required on the first write if no summary was given when entering plan mode. Used to derive the plan filename.",
+          },
         },
         required: ["content"],
       },
       async execute(
         _toolCallId: string,
-        params: { content: string },
+        params: { content: string; summary?: string },
         _signal: AbortSignal,
       ) {
         if (!pm.isPlanMode) {
@@ -789,6 +830,12 @@ ${planContent}
             ],
             details: { approved: false },
           };
+        }
+
+        // Initialize the plan file on first write if not already initialized
+        if (!pm.planFile.getFilePath()) {
+          const summary = params.summary ?? "untitled";
+          pm.planFile.init(pm.cwd, summary);
         }
 
         fs.writeFileSync(pm.planFile.getFilePath(), params.content, "utf-8");
