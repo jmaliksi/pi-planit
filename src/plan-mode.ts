@@ -342,10 +342,16 @@ ${planContent}
   onTurnEnd(event: TurnEndEvent, ctx: ExtensionContext): void {
     if (this.phase === "executing") {
       const text = this.extractAssistantText(event.message);
-      if (!text) return;
+      if (!text) {
+        this.persistState(ctx);
+        return;
+      }
 
       const doneMatches = text.match(/\[DONE:(\d+)\]/g);
-      if (!doneMatches) return;
+      if (!doneMatches) {
+        this.persistState(ctx);
+        return;
+      }
 
       const completedSteps = doneMatches.map((m) =>
         parseInt(m.replace("[DONE:", "").replace("]", ""), 10),
@@ -372,6 +378,7 @@ ${planContent}
       this.ui.setStatus(statusText, ctx.hasUI, ctx.ui);
       this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
     }
+    this.persistState(ctx);
   }
 
   // ── Agent End: show review menu if agent just wrote the plan ────────
@@ -605,11 +612,31 @@ ${planContent}
       const latest = plans[0];
       this.planFile.load(latest.filePath);
       this.captureCurrentTools();
-      const readOnlyTools = this.getReadOnlyTools();
-      if (readOnlyTools.length > 0) {
-        this.pi.setActiveTools(readOnlyTools);
+
+      // Restore the saved phase from session instead of hardcoding to planning
+      const entries = ctx.sessionManager.getBranch();
+      let savedPhase = "planning" as PlanPhase;
+      for (const entry of entries) {
+        if (entry.type === "custom" && entry.customType === "planit") {
+          const data = (entry as any).data;
+          if (data?.phase && data.phase !== "idle") {
+            savedPhase = data.phase as PlanPhase;
+          }
+        }
       }
-      this.phase = "planning";
+
+      if (savedPhase === "planning") {
+        const readOnlyTools = this.getReadOnlyTools();
+        if (readOnlyTools.length > 0) {
+          this.pi.setActiveTools(readOnlyTools);
+        }
+        this.phase = "planning";
+      } else {
+        if (this.restoredTools && this.restoredTools.length > 0) {
+          this.pi.setActiveTools(this.restoredTools);
+        }
+        this.phase = savedPhase;
+      }
       this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
       this.ui.setStatus("⏸ plan (restored)", ctx.hasUI, ctx.ui);
       this.ui.showPlanningWidget(
@@ -656,13 +683,32 @@ ${planContent}
     // Load the selected plan
     this.planFile.load(selectedPlan.filePath);
 
-    // Enter planning mode with the loaded plan
+    // Enter the correct phase based on what was saved
     this.captureCurrentTools();
-    const readOnlyTools = this.getReadOnlyTools();
-    if (readOnlyTools.length > 0) {
-      this.pi.setActiveTools(readOnlyTools);
+
+    const entries = ctx.sessionManager.getBranch();
+    let savedPhase = "planning" as PlanPhase;
+    for (const entry of entries) {
+      if (entry.type === "custom" && entry.customType === "planit") {
+        const data = (entry as any).data;
+        if (data?.phase && data.phase !== "idle") {
+          savedPhase = data.phase as PlanPhase;
+        }
+      }
     }
-    this.phase = "planning";
+
+    if (savedPhase === "planning") {
+      const readOnlyTools = this.getReadOnlyTools();
+      if (readOnlyTools.length > 0) {
+        this.pi.setActiveTools(readOnlyTools);
+      }
+      this.phase = "planning";
+    } else {
+      if (this.restoredTools && this.restoredTools.length > 0) {
+        this.pi.setActiveTools(this.restoredTools);
+      }
+      this.phase = savedPhase;
+    }
     this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
     this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
     this.ui.showPlanningWidget(

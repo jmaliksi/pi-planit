@@ -5,33 +5,21 @@
 
 ---
 
-## 🔴 Critical — Agent Loop Stalls
+## 🟠 High — State Restoration
 
-### Issue 1: `continueEditing` transitions to planning but never resumes the agent
-- **Location:** `src/plan-mode.ts:499`
-- **Flow:** `/planit review` → "↻ Continue editing" → `continueEditing()` sets `phase = "planning"`, restores read-only tools
-- **Problem:** This path is called from `onAgentEnd`, meaning the agent has already finished its turn. After the dialog closes, the agent sits idle — no new turn is triggered. Same bug class as the auto-build `sendUserMessage()` fix.
-- **Per docs:** The `sendUserMessage` API is the documented way to trigger a new turn from an extension context. The agent loop doesn't auto-resume after `ui.select()`/`ui.editor()` dialogs.
-- **Fix:** After setting up planning UI, call:
-  ```ts
-  this.pi.sendUserMessage(
-    "The plan is ready for editing. Explore the codebase and revise the plan.",
-    { deliverAs: "followUp" },
-  );
-  ```
+### Issue 2: `resumePlan` hardcodes to `planning` instead of restoring saved state
+- **Location:** `src/plan-mode.ts:536-610`
+- **Status:** ✅ **Fixed** (2026-05-27)
+- **Flow:** `/planit resume` → picker or no-UI fallback → loads plan file → restores saved phase → shows widget
+- **Problem:** `resumePlan()` always resumed in `planning` phase regardless of what state was saved (e.g., `planned`, `executing`).
+- **Fix:** Both the no-UI and UI picker branches now scan session entries for a persisted `planit` custom type, extract `data.phase`, and restore the correct phase. For `planning`, read-only tools are set; for `planned`/`executing`, the full restored tool set is restored.
 
-### Issue 2: `resumePlan` loads a plan but doesn't start a new agent turn
-- **Location:** `src/plan-mode.ts:567`
-- **Flow:** `/planit resume` → picker → loads plan file → sets `phase = "planning"` → shows widget
-- **Problem:** The `session_tree` handler fires when the user navigates `/tree`. After navigation, the agent is idle. The restored planning state is invisible to the agent unless a new turn is triggered. The user sees the widget but the agent does nothing until they type something.
-- **Per docs:** `before_agent_start` is the right hook for injecting context, but the agent must first enter a turn.
-- **Fix:** After restoring planning state, call:
-  ```ts
-  this.pi.sendUserMessage(
-    "Plan restored: " + title,
-    { deliverAs: "followUp" },
-  );
-  ```
+### Issue 5: `resumePlan` (no-UI fallback) has same root cause as Issue 2
+- **Location:** `src/plan-mode.ts:536-555`
+- **Status:** ✅ **Fixed** (2026-05-27)
+- **Flow:** `/planit resume` with `ctx.hasUI === false` → loads plan → restores saved phase → shows widget
+- **Problem:** The no-UI branch loads the plan and sets `phase = "planning"` regardless of what was saved. Same root cause as Issue 2.
+- **Fix:** Fixed as part of Issue 2 — the no-UI branch now extracts `data.phase` from the session entry and restores the correct phase.
 
 ---
 
@@ -70,25 +58,16 @@
 - **Problem:** The widget (`planit-todos`) is never cleared. If the user was executing a plan with a checklist widget, that stale widget remains visible after exiting plan mode.
 - **Per docs:** `setWidget(key, undefined)` clears the widget.
 
-### Issue 5: `resumePlan` (no-UI fallback) doesn't restore the widget/status
-- **Location:** `src/plan-mode.ts:536`
-- **Flow:** `/planit resume` with `ctx.hasUI === false` → loads plan → enters planning
-- **Problem:** In print/RPC mode, the code sets `phase = "planning"` and calls `showPlanningWidget` but passes `hasUI: false` so it's a no-op. That's fine, but the agent is never kicked off to process the loaded plan. Same root cause as Issue 2.
-
 ---
 
 ## 🟠 High — `before_agent_start` Edge Case
 
-### Issue 6: Executing phase with no steps returns `undefined`, silently doing nothing
+### Issue 6: Executing phase with no steps — agent should stop
 - **Location:** `src/plan-mode.ts:269-272`
 - **Flow:** Agent is in executing phase → next turn starts → `onBeforeAgentStart` checks `this.planFile.hasSteps()` → if `false`, returns `undefined`
-- **Problem:** The system prompt injected by this handler contains the approved plan, step instructions, and `[DONE:n]` requirements. Without it, the agent has no idea it's supposed to be executing anything. It will just respond normally, ignore the plan, and the user sees no `[DONE:n]` markers. This is a silent failure path.
+- **Problem:** Without a system prompt, the agent has no idea it's supposed to be executing anything. It will just respond normally and ignore the plan.
 - **Trigger:** If the agent deletes or truncates the plan file while executing, or if `parseChecklist()` fails to match the step format.
-- **Fix:** When `phase === "executing"` and `!planFile.hasSteps()`, return an error prompt like:
-  ```
-  The approved plan has no steps. Review the plan file and either create steps or cancel execution.
-  ```
-  Or transition to a more appropriate phase (e.g., idle).
+- **Fix:** When `phase === "executing"` and `!planFile.hasSteps()`, transition to `idle` (stop execution). No system prompt is needed — the agent should simply stop executing a plan with no steps.
 
 ---
 
@@ -96,13 +75,15 @@
 
 ### Issue 7: `tool_execution_start` / `tool_execution_end` events not subscribed
 - **Location:** `src/plan-mode.ts:772-778` (registration section)
-- **Problem:** The extension subscribes to `tool_call` but not to `tool_execution_start` or `tool_execution_end`. If the user wants to track tool execution progress during auto-build, they can't. This is minor since `turn_end` already tracks `[DONE:n]`, but it means the extension can't distinguish between a tool call being preflighted vs actually executing.
-- **Per docs:** These events are available and fire before/after each tool execution.
+- **Status:** ⏸ Irrelevant for now
+- **Problem:** The extension subscribes to `tool_call` but not to `tool_execution_start` or `tool_execution_end`. Minor since `turn_end` already tracks `[DONE:n]`.
+- **Note:** Can be added later if tool execution granularity is needed.
 
 ### Issue 8: `input` event not subscribed
 - **Location:** `src/plan-mode.ts`
-- **Problem:** The extension doesn't subscribe to the `input` event. This means it can't intercept or transform user messages before the agent sees them. For example, if the user types `/planit` during agent execution, the current code checks `this.isExecuting` in the command handler, but an `input` handler could provide earlier interception (e.g., auto-cancel, or transforming `/planit` into a custom message).
-- **Per docs:** `input` fires after extension commands are checked but before skill/template expansion. Returning `{ action: "handled" }` skips the agent entirely.
+- **Status:** ⏸ Irrelevant for now
+- **Problem:** The extension doesn't subscribe to the `input` event. Could enable earlier interception of user messages (e.g., auto-cancel on `/planit` during execution).
+- **Note:** Can be added later when this pattern is needed.
 
 ---
 
@@ -110,14 +91,15 @@
 
 ### Issue 9: `persistState` serializes `restoredTools` but `restoreState` doesn't use it
 - **Location:** `src/plan-mode.ts:381` vs `389-419`
-- **Problem:** `persistState` writes `restoredTools` to the session entry. `restoreState` ignores the persisted value and calls `this.pi.getAllTools()` to re-capture the current tool set. This is actually a conscious design (stale persisted tools could differ from current session tools), but it means `restoredTools` in the persisted state is dead data. The comment in `restoreState` says "Capture the current session's tool set (not stale persisted ones)" — so this is intentional, but misleading.
-- **Severity:** Low. No functional bug, just confusing.
+- **Problem:** `persistState` writes `restoredTools` to the session entry. `restoreState` ignores the persisted value and calls `this.pi.getAllTools()` to re-capture the current tool set. The `restoredTools` in the persisted state is dead data.
+- **Severity:** Low. No functional bug.
+- **Fix:** Remove `restoredTools` from `persistState()` serialization — don't serialize captured tools on session save.
 
 ### Issue 10: `reviewPending` flag has a race condition
 - **Location:** `src/plan-mode.ts:107, 359, 468`
 - **Problem:** `reviewPending` is set to `true` in `reviewPlan()` and cleared in `onAgentEnd()`. But `onAgentEnd` fires for *every* agent end, not just the one after writing a plan. If the agent ends a turn for any other reason (e.g., user sent a follow-up, or the agent hit max turns), `reviewPending` would be cleared prematurely. If the agent then writes a plan in a subsequent turn, `reviewPending` would be `false` so `onAgentEnd` would return early and never show the review menu.
 - **Trigger:** User types a follow-up message while plan is being written.
-- **Fix:** Set `reviewPending` closer to the event that triggers plan writing (e.g., in `write_plan` tool execution, or check `planFile.hasSteps()` in `onAgentEnd` instead of relying on the flag).
+- **Fix:** Replace the `reviewPending` flag with a direct check of `planFile.hasSteps()` in `onAgentEnd()`. If steps exist, show the review menu regardless of the flag.
 
 ---
 
@@ -125,17 +107,19 @@
 
 ### Issue 11: Non-UI mode auto-approves with `buildAuto` instead of notifying user
 - **Location:** `src/ui.ts:50-52`
-- **Problem:** In print/RPC mode (`hasUI === false`), `showReviewMenu()` returns `buildAuto` and calls `notify()` — which is also a no-op in non-UI mode. So the user gets no feedback at all that the plan was auto-approved. They just see the agent start executing.
-- **Per docs:** In non-UI mode, the extension should at minimum log to console. Currently it only calls `this.ui.notify()` which silently returns.
+- **Status:** ⚠️ Partially acceptable
+- **Problem:** In print/RPC mode (`hasUI === false`), `showReviewMenu()` returns `buildAuto` and calls `notify()` — which is a no-op in non-UI mode. The user gets no feedback that the plan was auto-approved.
+- **Fix:** Log to console instead of calling `this.ui.notify()` in non-UI mode. Simple one-liner.
 
 ### Issue 12: `showReviewMenu` doesn't show the plan in non-UI mode
 - **Location:** `src/ui.ts:48-53`
+- **Status:** 📝 Design issue to solve later
 - **Problem:** In non-UI mode, the plan content is never shown to the user. It just auto-approves. In a headless context, there's no way to review the plan.
-- **Suggestion:** Log the plan content to stdout or `console.log` before auto-approving.
+- **Note:** We're halfway there — the plan is a literal file on disk so headless users can use their builtin editor to view it. What's missing is better controls for approving/denying the plan in headless mode. This should be addressed when designing the headless approval flow.
 
 ### Issue 13: Widget key `"planit-todos"` is hardcoded
 - **Location:** `src/ui.ts:19`
-- **Problem:** The widget key is hardcoded. If multiple instances of the extension were somehow loaded, they'd conflict. Minor, since there's only one instance.
+- **Status:** ✅ Acceptable — only one extension instance runs per session, so no conflict risk.
 
 ---
 
@@ -143,26 +127,29 @@
 
 | # | Severity | Category | Issue | Location | Status |
 |---|----------|----------|-------|----------|--------|
-| 1 | 🔴 Critical | Agent stall | `continueEditing` doesn't resume agent | plan-mode.ts:499 | ⏳ |
-| 2 | 🔴 Critical | Agent stall | `resumePlan` doesn't resume agent | plan-mode.ts:567 | ⏳ |
+| 2 | 🟠 High | State restoration | `resumePlan` hardcodes to `planning` | plan-mode.ts:536-610 | ✅ Fixed |
+| 5 | 🟠 High | State restoration | Same root cause as Issue 2 | plan-mode.ts:536-555 | ✅ Fixed |
 | 3 | 🟠 High | Missing UI | `cancelPlan` doesn't set widget/status | plan-mode.ts:627 | ✅ Fixed |
 | 3b | 🟠 High | Missing UI | Checkbox widget not dismissed on mode transitions | plan-mode.ts (multiple) | ✅ Fixed |
 | 4 | 🟠 High | Missing UI | `exitPlanning` doesn't clear widget | plan-mode.ts:203 | ✅ Fixed |
-| 5 | 🟠 High | Agent stall | `resumePlan` non-UI doesn't trigger agent | plan-mode.ts:536 | ⏳ |
-| 6 | 🟠 High | Silent fail | Executing with no steps → no prompt injected | plan-mode.ts:269 | ⏳ |
-| 7 | 🟡 Medium | Missing event | No `tool_execution_start`/`end` subscription | plan-mode.ts:772 |
-| 8 | 🟡 Medium | Missing event | No `input` event subscription | plan-mode.ts |
-| 9 | 🟡 Medium | Dead data | `persistState` writes unused `restoredTools` | plan-mode.ts:381 |
-| 10 | 🟡 Medium | Race condition | `reviewPending` cleared prematurely | plan-mode.ts:107 |
-| 11 | 🟢 Low | UX | Non-UI auto-approve silently does nothing | ui.ts:50 |
-| 12 | 🟢 Low | UX | Non-UI mode never shows plan content | ui.ts:48 |
-| 13 | 🟢 Low | DX | Hardcoded widget key | ui.ts:19 |
+| 6 | 🟠 High | Silent fail | Executing with no steps → agent should stop | plan-mode.ts:269 | ⏳ |
+| 7 | 🟡 Medium | Missing event | No `tool_execution_start`/`end` subscription | plan-mode.ts:772 | ⏸ Irrelevant for now |
+| 8 | 🟡 Medium | Missing event | No `input` event subscription | plan-mode.ts | ⏸ Irrelevant for now |
+| 9 | 🟡 Medium | Dead data | `persistState` writes unused `restoredTools` | plan-mode.ts:381 | ⏳ |
+| 10 | 🟡 Medium | Race condition | `reviewPending` cleared prematurely | plan-mode.ts:107 | ⏳ |
+| 11 | 🟢 Low | UX | Non-UI auto-approve silently does nothing | ui.ts:50 | ⚠️ Partially acceptable |
+| 12 | 🟢 Low | UX | Non-UI mode never shows plan content | ui.ts:48 | 📝 Design issue later |
+| 13 | 🟢 Low | DX | Hardcoded widget key | ui.ts:19 | ✅ Acceptable |
 
 ## Priority Ordering for Fixes
 
-1. **Issues 1, 2** — Same root cause as the auto-build fix. Add `sendUserMessage()` calls to resume the agent.
-2. **Issue 6** — Prevents execution from working at all when steps are missing.
-3. **Issue 10** — Race condition that could silently break the review flow.
-4. **Issues 11, 12** — Non-UX improvements for headless/CI use cases.
+1. **Issue 6** — When executing phase has no steps, transition to `idle` (stop execution).
+2. **Issue 10** — Replace `reviewPending` flag with `planFile.hasSteps()` check in `onAgentEnd()`.
+3. **Issue 9** — Remove `restoredTools` from `persistState()` serialization.
+4. **Issue 11** — Log to console in non-UI mode instead of calling `ui.notify()`.
+5. **Issue 12** — Design issue: add headless approval/denial controls (deferred).
 
+> **Fixed:** Issues 2, 5 (resumePlan restores saved phase, 2026-05-27).
 > **Fixed:** Issues 3, 3b, 4 (checkbox widget dismissal across all mode transitions, 2026-05-27).
+> **Deferred:** Issues 7, 8 (irrelevant for now).
+> **Acceptable:** Issues 12 (design issue), 13 (single instance).
