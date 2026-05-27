@@ -1,7 +1,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 /** Review action returned from the plan review menu. */
-export type ReviewAction = "buildAuto" | "buildGuided" | "continueEditing";
+export type ReviewAction = "buildAuto" | "buildMyself" | "continueEditing";
 
 /**
  * Lightweight UI helper that delegates to ExtensionUIContext.
@@ -65,8 +65,8 @@ export class PlanUI {
 
     // User pressed Enter — ask which build mode
     const options = [
-      "↺ Build (auto)",
-      "✓ Build (guided)",
+      "⚡ Build (auto)",
+      "🔧 Build (myself)",
       "↻ Continue editing",
     ];
 
@@ -75,7 +75,7 @@ export class PlanUI {
 
     const actionMap: Record<string, ReviewAction> = {
       [options[0]]: "buildAuto",
-      [options[1]]: "buildGuided",
+      [options[1]]: "buildMyself",
       [options[2]]: "continueEditing",
     };
 

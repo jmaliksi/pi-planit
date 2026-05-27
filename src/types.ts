@@ -1,4 +1,4 @@
-export type PlanPhase = "idle" | "planning" | "executing";
+export type PlanPhase = "idle" | "planning" | "planned" | "executing";
 
 export interface PlanModeConfig {
   /** Tool names allowed in plan mode (intersection with available tools) */
@@ -12,4 +12,7 @@ export interface ChecklistItem {
   text: string;
   completed: boolean;
 }
+
+/** Phases where the user has full tool access and control. */
+export type UserControlPhase = "planned" | "executing";
 

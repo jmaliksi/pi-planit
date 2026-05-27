@@ -103,7 +103,6 @@ export class PlanMode {
   private bashFilter: BashFilter;
   private ui: PlanUI;
   private config: PlanModeConfig;
-  private buildMode: "auto" | "guided" = "auto";
   private reviewPending: boolean = false;
 
   constructor(
@@ -177,6 +176,10 @@ export class PlanMode {
 
   get isExecuting(): boolean {
     return this.phase === "executing";
+  }
+
+  get isPlanned(): boolean {
+    return this.phase === "planned";
   }
 
   // ── Tool Switching ─────────────────────────────────────────────────
@@ -279,22 +282,31 @@ export class PlanMode {
       };
     }
 
+    // Planned phase — inject approved plan as reference, no auto-execution
+    if (this.phase === "planned" && this.planFile.hasSteps()) {
+      const planContent = this.planFile.getContent();
+      return {
+        systemPrompt: `${event.systemPrompt}
+
+[APPROVED PLAN REFERENCE]
+The plan below is available as a reference. The user is in control.
+
+Full plan:
+${planContent}
+`.trim(),
+      };
+    }
+
     // Executing phase — inject approved plan
     if (this.phase === "executing" && this.planFile.hasSteps()) {
       const remaining = this.planFile.getRemainingSteps();
       const planContent = this.planFile.getContent();
-      const isGuided = this.buildMode === "guided";
-
-      const modeContext = isGuided
-        ? `Build (guided) mode: The plan below is a reference, not a hard constraint.
-You may deviate, iterate, or refactor as needed. The user is in the loop.`
-        : `Execute the remaining steps from the approved plan exactly.`;
 
       return {
         systemPrompt: `${event.systemPrompt}
 
-[APPROVED PLAN EXECUTION — ${isGuided ? "GUIDED" : "AUTO"} MODE]
-${modeContext}
+[APPROVED PLAN EXECUTION]
+Execute the remaining steps from the approved plan exactly.
 
 Remaining steps:
 ${remaining}
@@ -328,30 +340,37 @@ ${planContent}
   // ── Progress Tracking ──────────────────────────────────────────────
 
   onTurnEnd(event: TurnEndEvent, ctx: ExtensionContext): void {
-    if (this.phase !== "executing") return;
+    if (this.phase === "executing") {
+      const text = this.extractAssistantText(event.message);
+      if (!text) return;
 
-    const text = this.extractAssistantText(event.message);
-    if (!text) return;
+      const doneMatches = text.match(/\[DONE:(\d+)\]/g);
+      if (!doneMatches) return;
 
-    const doneMatches = text.match(/\[DONE:(\d+)\]/g);
-    if (!doneMatches) return;
+      const completedSteps = doneMatches.map((m) =>
+        parseInt(m.replace("[DONE:", "").replace("]", ""), 10),
+      );
 
-    const completedSteps = doneMatches.map((m) =>
-      parseInt(m.replace("[DONE:", "").replace("]", ""), 10),
-    );
-
-    this.planFile.markCompleted(completedSteps);
+      this.planFile.markCompleted(completedSteps);
+    }
 
     const total = this.planFile.getTotalSteps();
     const completed = this.planFile.getCompletedSteps();
-    this.ui.setStatus(`📋 ${completed}/${total}`, ctx.hasUI, ctx.ui);
-    this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
+    const statusText = `📋 ${completed}/${total}`;
 
-    if (completed === total) {
-      this.phase = "idle";
-      this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
-      this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
-      this.ui.notify("All plan steps complete.", "info", ctx.hasUI, ctx.ui);
+    if (this.phase === "executing") {
+      this.ui.setStatus(statusText, ctx.hasUI, ctx.ui);
+      this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
+
+      if (completed === total) {
+        this.phase = "idle";
+        this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
+        this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
+        this.ui.notify("All plan steps complete.", "info", ctx.hasUI, ctx.ui);
+      }
+    } else if (this.phase === "planned") {
+      this.ui.setStatus(statusText, ctx.hasUI, ctx.ui);
+      this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
     }
   }
 
@@ -428,6 +447,17 @@ ${planContent}
           ctx.ui,
         );
         this.ui.notify("Plan mode restored from session.", "info", ctx.hasUI, ctx.ui);
+      } else if (data.phase === "planned") {
+        // Restore full tool set — user has control, agent has plan reference.
+        if (this.restoredTools && this.restoredTools.length > 0) {
+          this.pi.setActiveTools(this.restoredTools);
+        }
+        this.phase = "planned";
+        const completed = this.planFile.getCompletedSteps();
+        const total = this.planFile.getTotalSteps();
+        this.ui.setStatus(`📋 ${completed}/${total}`, ctx.hasUI, ctx.ui);
+        this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
+        this.ui.notify("Plan restored from session (planned). Full tools available.", "info", ctx.hasUI, ctx.ui);
       } else if (data.phase === "executing") {
         // Restore full tool set so the agent can write again.
         if (this.restoredTools && this.restoredTools.length > 0) {
@@ -459,10 +489,10 @@ ${planContent}
         if (!result) return;
         switch (result) {
           case "buildAuto":
-            this.build("auto", ctx);
+            this.build(ctx);
             break;
-          case "buildGuided":
-            this.build("guided", ctx);
+          case "buildMyself":
+            this.buildMyself(ctx);
             break;
           case "continueEditing":
             this.continueEditing(ctx);
@@ -481,8 +511,7 @@ ${planContent}
     );
   }
 
-  private build(mode: "auto" | "guided", ctx: ExtensionContext): void {
-    this.buildMode = mode;
+  private build(ctx: ExtensionContext): void {
     this.phase = "executing";
 
     // Restore the full tool set captured when plan mode was entered
@@ -497,24 +526,35 @@ ${planContent}
     this.ui.setStatus(`\ud83d\udccb ${completed}/${total}`, ctx.hasUI, ctx.ui);
     this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
 
-    const messages = {
-      auto: "Building (auto) — executing all steps.",
-      guided: "Building (guided) — writes enabled, plan as reference.",
-    };
-    this.ui.notify(messages[mode], "info", ctx.hasUI, ctx.ui);
+    this.ui.notify("Building — executing all steps.", "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
 
-    // Auto mode: kick off the agent's execution turn.
+    // Kick off the agent's execution turn.
     // The system prompt (injected by onBeforeAgentStart) already contains
     // the approved plan and step instructions — we just need to signal the
     // agent to begin.
-    if (mode === "auto") {
-      this.pi.sendUserMessage(
-        "Start executing the approved plan now.",
-        { deliverAs: "followUp" },
-      );
+    this.pi.sendUserMessage(
+      "Start executing the approved plan now.",
+      { deliverAs: "followUp" },
+    );
+  }
+
+  private buildMyself(ctx: ExtensionContext): void {
+    this.phase = "planned";
+
+    // Restore the full tool set captured when plan mode was entered
+    if (this.restoredTools && this.restoredTools.length > 0) {
+      this.pi.setActiveTools(this.restoredTools);
     }
-    // Guided mode: user has the reins — no auto-kickoff.
+
+    // Show checkboxes on screen
+    const total = this.planFile.getTotalSteps();
+    const completed = this.planFile.getCompletedSteps();
+    this.ui.setStatus(`\ud83d\udccb ${completed}/${total}`, ctx.hasUI, ctx.ui);
+    this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
+
+    this.ui.notify("Building (myself) — full tools restored. The plan is available as a reference.", "info", ctx.hasUI, ctx.ui);
+    this.persistState(ctx);
   }
 
   private continueEditing(ctx: ExtensionContext): void {
@@ -527,14 +567,17 @@ ${planContent}
       this.pi.setActiveTools(readOnlyTools);
     }
 
-    this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
-    this.ui.showPlanningWidget(
-      this.planFile.getFilePath(),
-      this.planFile.getTitle(),
-      this.planFile.getWidgetLines(),
+    // Show a small widget with just the plan file location
+    this.ui.setWidget(
+      [
+        `📋 Plan: ${this.planFile.getTitle() ?? "untitled"}`,
+        `   [path: ${this.planFile.getFilePath()}]`,
+      ],
       ctx.hasUI,
       ctx.ui,
     );
+
+    this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
     this.ui.notify(
       "Back to planning. Edit the plan and ask the agent to explore further.",
       "info",
@@ -637,7 +680,7 @@ ${planContent}
    * Cancel current execution or planning and return to the appropriate state.
    */
   private cancelPlan(ctx: ExtensionContext): void {
-    if (this.isExecuting) {
+    if (this.isExecuting || this.isPlanned) {
       // Return to planning: capture current tools, then switch to read-only
       this.captureCurrentTools();
       this.phase = "planning";
@@ -645,7 +688,6 @@ ${planContent}
       if (readOnlyTools.length > 0) {
         this.pi.setActiveTools(readOnlyTools);
       }
-      this.ui.setWidget(undefined, ctx.hasUI, ctx.ui);
       this.ui.setStatus("⏸ plan", ctx.hasUI, ctx.ui);
       this.ui.showPlanningWidget(
         this.planFile.getFilePath(),
@@ -654,7 +696,7 @@ ${planContent}
         ctx.hasUI,
         ctx.ui,
       );
-      this.ui.notify("Execution cancelled. Back to planning.", "info", ctx.hasUI, ctx.ui);
+      this.ui.notify("Plan canceled. Back to planning.", "info", ctx.hasUI, ctx.ui);
       this.persistState(ctx);
     } else if (this.isPlanMode) {
       // Exit planning: same as /planit off
@@ -676,8 +718,8 @@ ${planContent}
         const raw = args.trim().toLowerCase();
 
         if (raw.length === 0) {
-          // Toggle: idle <-> planning, executing -> planning
-          if (this.isExecuting) {
+          // Toggle: idle <-> planning, planned/executing -> planning
+          if (this.isExecuting || this.isPlanned) {
             this.cancelPlan(ctx);
           } else if (this.isPlanMode) {
             this.exitPlanning(ctx);
@@ -712,6 +754,12 @@ ${planContent}
             const total = this.planFile.getTotalSteps();
             const completed = this.planFile.getCompletedSteps();
             this.ui.notify("Plan mode: executing approved plan", "info", ctx.hasUI, ctx.ui);
+            this.ui.setStatus(`\uD83D\uDCCB ${completed}/${total}`, ctx.hasUI, ctx.ui);
+            this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
+          } else if (this.isPlanned) {
+            const total = this.planFile.getTotalSteps();
+            const completed = this.planFile.getCompletedSteps();
+            this.ui.notify("Plan mode: planned — full tools available", "info", ctx.hasUI, ctx.ui);
             this.ui.setStatus(`\uD83D\uDCCB ${completed}/${total}`, ctx.hasUI, ctx.ui);
             this.ui.setWidget(this.planFile.getWidgetLines(), ctx.hasUI, ctx.ui);
           } else {
