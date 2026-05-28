@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as yaml from "yaml";
 import type { ChecklistItem } from "./types";
 import { agentPath } from "./path-utils";
 
@@ -28,6 +29,15 @@ export class PlanFile {
   private filePath: string = "";
   content: string = "";
   private items: ChecklistItem[] = [];
+  private frontmatterData: {
+    title?: string;
+    summary?: string;
+    steps?: Array<{
+      index: number;
+      text: string;
+      completed: boolean;
+    }>;
+  } = {};
 
   /**
    * Initialize plan file in agent plans directory.
@@ -46,17 +56,18 @@ export class PlanFile {
       fs.mkdirSync(projectPlansDir, { recursive: true });
     }
 
-    this.content = `# Plan
-## Summary
-
-## Steps
+    this.content = `---
+title: "Plan"
+summary: ""
+steps: []
+---
 
 ## Plan Details
 
 ## Assumptions and Reference
 `;
     fs.writeFileSync(planPath, this.content, "utf-8");
-    this.parseChecklist();
+    this.parseFrontmatter();
   }
 
   getFilePath(): string {
@@ -111,25 +122,51 @@ export class PlanFile {
   }
 
   getTitle(): string | null {
-    const match = this.content.match(/^#\s+(.+)$/m);
-    return match ? match[1].trim() : null;
+    return this.frontmatterData.title ?? null;
   }
 
-  parseChecklist(): void {
-    const stepRegex = /-\s+\[([ x])\]\s+(?:Step\s+(\d+):\s*)?(.+)$/gm;
-    const newItems: ChecklistItem[] = [];
-    let stepNum = 0;
-    let match;
-
-    while ((match = stepRegex.exec(this.content)) !== null) {
-      const completed = match[1] === "x";
-      const step = match[2] ? parseInt(match[2], 10) : ++stepNum;
-      const text = match[3].trim();
-      newItems.push({ step, text, completed });
-      if (!match[2]) stepNum++;
+  parseFrontmatter(): void {
+    // Extract content between --- delimiters
+    const fmMatch = this.content.match(/^---\n([\s\S]*?)\n---/);
+    if (!fmMatch) {
+      this.items = [];
+      this.frontmatterData = {};
+      return;
     }
 
-    this.items = newItems;
+    try {
+      const parsed = yaml.parse(fmMatch[1]) as {
+        title?: string;
+        summary?: string;
+        steps?: Array<{
+          index: number;
+          text: string;
+          completed: boolean;
+        }>;
+      };
+
+      this.frontmatterData = parsed;
+
+      if (!Array.isArray(parsed.steps)) {
+        this.items = [];
+        return;
+      }
+
+      this.items = parsed.steps
+        .filter(
+          (s) =>
+            typeof s.index === "number" &&
+            typeof s.text === "string",
+        )
+        .map((s) => ({
+          step: s.index!,
+          text: s.text!,
+          completed: s.completed === true,
+        }));
+    } catch {
+      this.items = [];
+      this.frontmatterData = {};
+    }
   }
 
   /**
@@ -179,26 +216,30 @@ export class PlanFile {
       );
     }
 
-    this.parseChecklist();
+    this.parseFrontmatter();
   }
 
   private updateFile(): void {
-    const lines = this.content.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const stepMatch = line.match(/(-\s+\[([ x])\]\s+(?:Step\s+(\d+):\s*)?(.+))/);
-      if (stepMatch) {
-        const stepNum = stepMatch[3] ? parseInt(stepMatch[3], 10) : null;
-        if (!stepNum) continue; // Require "Step N:" prefix for matching
-        const item = this.items.find((it) => it.step === stepNum);
-        if (item) {
-          const checkbox = item.completed ? "x" : " ";
-          lines[i] = line.replace(`[${stepMatch[2]}]`, `[${checkbox}]`);
-        }
-      }
-    }
+    // Serialize items back to YAML frontmatter
+    const title = this.frontmatterData.title ?? "Plan";
+    const frontmatter = yaml.stringify({
+      title,
+      summary: this.frontmatterData.summary ?? "",
+      steps: this.items.map((item) => ({
+        index: item.step,
+        text: item.text,
+        completed: item.completed,
+      })),
+    });
 
-    this.content = lines.join("\n");
+    // Extract markdown body (content after the closing --- delimiter)
+    const fmEndMatch = this.content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+    const markdownBody = fmEndMatch ? fmEndMatch[1].trimEnd() : "";
+
+    // Reconstruct: frontmatter + markdown body
+    this.content = `---\n${frontmatter}---\n${
+      markdownBody ? `\n\n${markdownBody}` : ""
+    }`;
     fs.writeFileSync(this.filePath, this.content, "utf-8");
   }
 }

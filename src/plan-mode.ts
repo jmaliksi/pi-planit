@@ -28,14 +28,17 @@ import { agentPath } from "./path-utils";
  * Plan file format shown to the agent in the system prompt.
  * Should match the default template written by PlanFile.init().
  */
-export const PLAN_FORMAT_TEMPLATE = `# Title
-## Summary
-One-paragraph overview.
-
-## Steps
-- [ ] Step 1: Objective — target files, validation method
-- [ ] Step 2: Objective — target files, validation method
-- [ ] Step 3: ...
+export const PLAN_FORMAT_TEMPLATE = `---
+title: "3-5 word title for this plan"
+summary: "Overview of changes"
+steps:
+  - index: 1
+    text: "Step 1 — Summary of action"
+    completed: false
+  - index: 2
+    text: "Step 2 — Summary of action"
+    completed: false
+---
 
 ## Plan Details
 Implementation notes for each step. Target files, code changes, config updates,
@@ -44,7 +47,7 @@ validation criteria. Include concrete file paths and function/method names.
 ## Assumptions and Reference
 - Assumption 1 — brief explanation
 - Reference: https://example.com/api-docs
-- Reference: src/auth/jwt.ts
+- Reference: src/module/path.ts
 `;
 
 /**
@@ -85,7 +88,7 @@ tool for saving plans. Do NOT attempt to use write, edit, or bash to save files.
 3-5 word summary from the conversation and include it in the write_plan call.**
 - The file path is managed entirely by the extension. Do not try to find, guess,
 or specify a file path.
-- The plan must include a checkbox todo list under the "Steps" section.
+- The plan must use YAML frontmatter for steps. Each step has \`index\`, \`text\`, and \`completed\` fields.
 - While you are in plan mode, **never** offer to implement the plan. Only offer to
 write the plan, and if the plan is ready, prompt the user to review and approve it by saying
 "Plan is ready to review with \`/planit review\`".
@@ -316,9 +319,16 @@ Execute the remaining steps from the approved plan exactly.
 Remaining steps:
 ${remaining}
 
-After completing each step, include [DONE:n] where n is the step number.
+## Execution Rules
 
-Full plan reference:
+1. **Complete each step using available tools** (write, edit, bash, etc.)
+2. **After finishing a step, call the \`mark_plan_step\` tool** with that step's index number. Example: \`mark_plan_step([1])\`
+3. **You can mark multiple steps at once** if you finished them in a single turn: \`mark_plan_step([2, 3])\`
+4. **The tool returns updated progress** showing remaining steps — use this to know what to do next
+5. **Do NOT use [DONE:n] text markers** — only use the \`mark_plan_step\` tool to record completion
+6. **Do NOT mark a step complete until it's actually done** — the plan reference shows \`completed: true\` for finished steps
+
+Full plan reference (see \`completed: true\` for finished steps):
 ${planContent}
 `.trim(),
       };
@@ -344,25 +354,10 @@ ${planContent}
 
   // ── Progress Tracking ──────────────────────────────────────────────
 
-  onTurnEnd(event: TurnEndEvent, ctx: ExtensionContext): void {
+  onTurnEnd(_event: TurnEndEvent, ctx: ExtensionContext): void {
     if (this.phase === "executing") {
-      const text = this.extractAssistantText(event.message);
-      if (!text) {
-        this.persistState(ctx);
-        return;
-      }
-
-      const doneMatches = text.match(/\[DONE:(\d+)\]/g);
-      if (!doneMatches) {
-        this.persistState(ctx);
-        return;
-      }
-
-      const completedSteps = doneMatches.map((m) =>
-        parseInt(m.replace("[DONE:", "").replace("]", ""), 10),
-      );
-
-      this.planFile.markCompleted(completedSteps);
+      // mark_plan_step tool handles completion — no text parsing needed
+      // Just update the widget/status after each turn for real-time feedback
     }
 
     const total = this.planFile.getTotalSteps();
@@ -940,7 +935,7 @@ ${planContent}
 
         fs.writeFileSync(pm.planFile.getFilePath(), params.content, "utf-8");
         pm.planFile.content = params.content;
-        pm.planFile.parseChecklist();
+        pm.planFile.parseFrontmatter();
 
         return {
           content: [
@@ -950,6 +945,59 @@ ${planContent}
             },
           ],
           details: { approved: true },
+        };
+      },
+    });
+
+    // ── Custom Tool: mark_plan_step ─────────────────────────────────
+    //
+    // The agent uses this during executing phase to mark plan steps
+    // as completed. Returns progress feedback so the agent knows what's
+    // left to do.
+
+    pi.registerTool({
+      name: "mark_plan_step",
+      label: "Mark Plan Step Complete",
+      description:
+        "Mark one or more plan steps as completed during plan execution. Call this tool after finishing each step. The step numbers correspond to the 'index' field in the plan's YAML frontmatter. Can mark multiple steps at once: [1, 3, 5]. Returns updated progress and remaining steps.",
+      parameters: {
+        type: "object",
+        properties: {
+          step_numbers: {
+            type: "array",
+            items: { type: "number" },
+            description: "Step index numbers to mark as completed (from the 'index' field in frontmatter steps)",
+          },
+        },
+        required: ["step_numbers"],
+      },
+      async execute(
+        _toolCallId: string,
+        params: { step_numbers: number[] },
+        _signal: AbortSignal,
+      ) {
+        if (!pm.isExecuting) {
+          return {
+            content: [{
+              type: "text",
+              text: "Error: Not in executing phase. Use /planit review to execute a plan.",
+            }],
+            details: { approved: false, plan_updated: false },
+          };
+        }
+        pm.planFile.markCompleted(params.step_numbers);
+        const total = pm.planFile.getTotalSteps();
+        const completed = pm.planFile.getCompletedSteps();
+        const remaining = pm.planFile.getRemainingSteps();
+        let text = `Steps ${params.step_numbers} marked as completed. Progress: ${completed}/${total}.`;
+        if (remaining) {
+          text += ` Remaining: ${remaining}`;
+        } else {
+          text += " All steps complete!";
+        }
+        return {
+          content: [{ type: "text", text }],
+          details: { approved: true, plan_updated: true },
         };
       },
     });
@@ -1064,22 +1112,4 @@ ${planContent}
     this.planFile = new PlanFile();
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────
-
-  private extractAssistantText(message: unknown): string {
-    if (!message || (message as any).role !== "assistant") return "";
-    const msg = message as any;
-    if (typeof msg.content === "string") return msg.content;
-    if (!Array.isArray(msg.content)) {
-      console.warn(`[planit] assistant message has unexpected content type: ${typeof msg.content}`);
-      return "";
-    }
-    const textBlocks = msg.content.filter(
-      (b: unknown) => typeof b === "object" && b !== null && (b as any).type === "text",
-    );
-    if (textBlocks.length === 0 && msg.content.length > 0) {
-      console.warn("[planit] assistant message has no text blocks — [DONE:n] tracking skipped");
-    }
-    return textBlocks.map((b: unknown) => (b as any).text ?? "").join("\n");
-  }
 }

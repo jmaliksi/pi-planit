@@ -5,6 +5,45 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { PlanMode } from "../src/plan-mode";
 import { PlanFile } from "../src/plan-file";
 
+// ── mark_plan_step tool test helper ──────────────────────────────────
+
+function createPIWithPlan(
+  phase: "planning" | "executing" | "planned" | "idle" = "planning",
+  planContent?: string,
+): { pi: ExtensionAPI; calls: string[][]; pm: PlanMode } {
+  const fullTools = [
+    { name: "read" },
+    { name: "write" },
+    { name: "edit" },
+    { name: "bash" },
+  ];
+  const { pi, calls } = createMockPI(fullTools);
+
+  const pm = new PlanMode(pi);
+  const ctx = pi.getContext()!;
+  (ctx as any).ui = {
+    notify: vi.fn(),
+    setStatus: vi.fn(),
+    setWidget: vi.fn(),
+    showPlanningWidget: vi.fn(),
+  };
+
+  // Initialize plan file
+  pm.cwd = ctx.cwd;
+  if (planContent) {
+    const filePath = path.join(ctx.cwd, "plan.md");
+    fs.mkdirSync(ctx.cwd, { recursive: true });
+    fs.writeFileSync(filePath, planContent, "utf-8");
+    pm.planFile.load(filePath, planContent);
+    pm.phase = phase;
+  }
+
+  // Register tools to activate them
+  pm.register(pi);
+
+  return { pi, calls, pm };
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function createMockPI(
@@ -262,17 +301,44 @@ describe("PlanMode — Phase 5: Execution commands", () => {
       fs.mkdirSync(projectDir, { recursive: true });
 
       const planPath = path.join(projectDir, "migrate-auth-2026-01-01T00-00-00.md");
-      fs.writeFileSync(planPath, "# Migrate Auth\n## Summary\n\n## Steps\n- [ ] Step 1: Update auth module\n");
+      const planContent = `---
+title: "Migrate Auth"
+summary: ""
+steps:
+  - index: 1
+    text: "Update auth module"
+    completed: false
+---
+
+## Plan Details
+
+## Assumptions and Reference
+`;
+      fs.writeFileSync(planPath, planContent);
 
       mockPI = createMockPI();
 
       const pm = new PlanMode(mockPI.pi);
       const ctx = mockPI.pi.getContext()!;
+      (ctx as any).sessionManager = {
+        getBranch: () => [
+          {
+            type: "custom",
+            customType: "planit",
+            data: {
+              phase: "planning",
+              planFilePath: planPath,
+              planContent,
+              restoredTools: ["read"],
+            },
+          },
+        ],
+      };
       (ctx as any).ui = {
         notify: vi.fn(),
         setStatus: vi.fn(),
         setWidget: vi.fn(),
-        select: vi.fn(),
+        select: vi.fn().mockResolvedValue(undefined),
       };
 
       await pm.resumePlan(ctx);
@@ -369,8 +435,22 @@ describe("PlanMode — Phase 5: Execution commands", () => {
       );
       fs.mkdirSync(projectDir, { recursive: true });
       const planPath = path.join(projectDir, "test-plan-2026-01-01T00-00-00.md");
-      const planContent =
-        "# Test Plan\n## Summary\nA test.\n\n## Steps\n- [ ] Step 1\n- [ ] Step 2\n";
+      const planContent = `---
+title: "Test Plan"
+summary: "A test."
+steps:
+  - index: 1
+    text: "Step 1"
+    completed: false
+  - index: 2
+    text: "Step 2"
+    completed: false
+---
+
+## Plan Details
+
+## Assumptions and Reference
+`;
       fs.writeFileSync(planPath, planContent);
 
       const pm = new PlanMode(mockPI.pi);
@@ -424,8 +504,22 @@ describe("PlanMode — Phase 5: Execution commands", () => {
       );
       fs.mkdirSync(projectDir, { recursive: true });
       const planPath = path.join(projectDir, "exec-plan-2026-01-01T00-00-00.md");
-      const planContent =
-        "# Exec Plan\n## Summary\nExec.\n\n## Steps\n- [x] Step 1\n- [ ] Step 2\n";
+      const planContent = `---
+title: "Exec Plan"
+summary: "Exec."
+steps:
+  - index: 1
+    text: "Step 1"
+    completed: true
+  - index: 2
+    text: "Step 2"
+    completed: false
+---
+
+## Plan Details
+
+## Assumptions and Reference
+`;
       fs.writeFileSync(planPath, planContent);
 
       const pm = new PlanMode(mockPI.pi);
@@ -473,9 +567,22 @@ describe("PlanMode — Phase 5: Execution commands", () => {
       );
       fs.mkdirSync(projectDir, { recursive: true });
       const planPath = path.join(projectDir, "fallback-plan-2026-01-01T00-00-00.md");
+      const planContent = `---
+title: "Fallback"
+summary: ""
+steps:
+  - index: 1
+    text: "Fallback step"
+    completed: false
+---
+
+## Plan Details
+
+## Assumptions and Reference
+`;
       fs.writeFileSync(
         planPath,
-        "# Fallback\n## Summary\n\n## Steps\n- [ ] Fallback step\n",
+        planContent,
       );
 
       const pm = new PlanMode(mockPI.pi);
@@ -584,6 +691,160 @@ describe("PlanMode — Phase 5: Execution commands", () => {
       expect(plans.length).toBe(2);
       expect(plans[0].filename).toBe("new-plan-2026-06-01T00-00-00.md");
       expect(plans[1].filename).toBe("old-plan-2026-01-01T00-00-00.md");
+    });
+  });
+
+  describe("mark_plan_step tool", () => {
+    let backupHome: string | undefined;
+
+    beforeEach(() => {
+      vi.restoreAllMocks();
+      backupHome = process.env.HOME;
+      process.env.HOME = "/tmp/planit-mark-plan-test-home";
+      fs.rmSync(process.env.HOME, { recursive: true, force: true });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      if (backupHome) {
+        process.env.HOME = backupHome;
+      } else {
+        delete process.env.HOME;
+      }
+      try {
+        fs.rmSync(process.env.HOME, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    });
+
+    it("returns error when not in executing phase", () => {
+      const planContent = `---
+title: "Test"
+summary: ""
+steps:
+  - index: 1
+    text: "Step 1"
+    completed: false
+  - index: 2
+    text: "Step 2"
+    completed: false
+---
+
+## Plan Details
+`;
+      const { pm } = createPIWithPlan("planned", planContent);
+
+      // Phase gate: isExecuting should be false
+      expect(pm.isExecuting).toBe(false);
+      expect(pm.isPlanned).toBe(true);
+    });
+
+    it("marks steps as completed when in executing phase", () => {
+      const planContent = `---
+title: "Test"
+summary: ""
+steps:
+  - index: 1
+    text: "Step 1"
+    completed: false
+  - index: 2
+    text: "Step 2"
+    completed: false
+---
+
+## Plan Details
+`;
+      const { pm } = createPIWithPlan("executing", planContent);
+
+      expect(pm.planFile.getCompletedSteps()).toBe(0);
+      expect(pm.planFile.getTotalSteps()).toBe(2);
+
+      // Call markCompleted directly to simulate tool behavior
+      pm.planFile.markCompleted([1]);
+
+      expect(pm.planFile.getCompletedSteps()).toBe(1);
+      expect(pm.planFile.getTotalSteps()).toBe(2);
+    });
+
+    it("returns progress feedback with remaining steps", () => {
+      const planContent = `---
+title: "Test"
+summary: ""
+steps:
+  - index: 1
+    text: "Step 1"
+    completed: false
+  - index: 2
+    text: "Step 2"
+    completed: false
+  - index: 3
+    text: "Step 3"
+    completed: false
+---
+
+## Plan Details
+`;
+      const { pm } = createPIWithPlan("executing", planContent);
+
+      pm.planFile.markCompleted([1, 2]);
+
+      const total = pm.planFile.getTotalSteps();
+      const completed = pm.planFile.getCompletedSteps();
+      const remaining = pm.planFile.getRemainingSteps();
+
+      expect(completed).toBe(2);
+      expect(total).toBe(3);
+      expect(remaining).toContain("Step 3");
+      expect(remaining).not.toContain("Step 1");
+      expect(remaining).not.toContain("Step 2");
+    });
+
+    it("returns 'all steps complete' when last step is marked", () => {
+      const planContent = `---
+title: "Test"
+summary: ""
+steps:
+  - index: 1
+    text: "Only step"
+    completed: false
+---
+
+## Plan Details
+`;
+      const { pm } = createPIWithPlan("executing", planContent);
+
+      pm.planFile.markCompleted([1]);
+
+      const remaining = pm.planFile.getRemainingSteps();
+      expect(remaining).toBe("");
+    });
+
+    it("handles marking multiple steps at once", () => {
+      const planContent = `---
+title: "Test"
+summary: ""
+steps:
+  - index: 1
+    text: "Step 1"
+    completed: false
+  - index: 2
+    text: "Step 2"
+    completed: false
+  - index: 3
+    text: "Step 3"
+    completed: false
+---
+
+## Plan Details
+`;
+      const { pm } = createPIWithPlan("executing", planContent);
+
+      pm.planFile.markCompleted([1, 3]);
+
+      expect(pm.planFile.getCompletedSteps()).toBe(2);
+      expect(pm.planFile.getTotalSteps()).toBe(3);
+      expect(pm.planFile.getRemainingSteps()).toContain("Step 2");
     });
   });
 });
