@@ -76,6 +76,8 @@ BLOCKED — they will not work.
 - **Only call write_plan when you have a complete, well-informed plan ready
 to save.** This means you have: identified target files, an agreed approach,
 and concrete, numbered steps with validation criteria.
+- You **must** show the user the plan in chat **at least once** before offering to
+write the plan.
 - **When the user says "write the plan", "create the plan", "write a plan",
 or any similar phrasing, you MUST call write_plan.** This is your designated
 tool for saving plans. Do NOT attempt to use write, edit, or bash to save files.
@@ -83,6 +85,10 @@ tool for saving plans. Do NOT attempt to use write, edit, or bash to save files.
 3-5 word summary from the conversation and include it in the write_plan call.**
 - The file path is managed entirely by the extension. Do not try to find, guess,
 or specify a file path.
+- The plan must include a checkbox todo list under the "Steps" section.
+- While you are in plan mode, **never** offer to implement the plan. Only offer to
+write the plan, and if the plan is ready, prompt the user to review and approve it by saying
+"Plan is ready to review with \`/planit review\`".
 
 ### RESPONSIBILITY
 1. Thoroughly explore the codebase — read files, search symbols, trace dependencies,
@@ -103,7 +109,6 @@ export class PlanMode {
   private bashFilter: BashFilter;
   private ui: PlanUI;
   private config: PlanModeConfig;
-  private reviewPending: boolean = false;
 
   constructor(
     private pi: ExtensionAPI,
@@ -384,11 +389,7 @@ ${planContent}
   // ── Agent End: show review menu if agent just wrote the plan ────────
 
   onAgentEnd(_event: AgentEndEvent, ctx: ExtensionContext): void {
-    if (!this.reviewPending) return;
-    this.reviewPending = false;
-
     if (!this.planFile.hasSteps()) {
-      this.ui.notify("Agent did not write a plan. You can try /planit review again.", "info", ctx.hasUI, ctx.ui);
       return;
     }
 
@@ -510,7 +511,6 @@ ${planContent}
     }
 
     // No plan on disk yet — prompt agent to write it first
-    this.reviewPending = true;
     this.ui.notify("No plan written yet. Asking agent to write the plan to file...", "info", ctx.hasUI, ctx.ui);
     this.pi.sendUserMessage(
       "Please write the plan you have in mind to the plan file using the write_plan tool so you can review it.",

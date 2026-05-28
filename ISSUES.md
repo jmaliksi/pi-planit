@@ -97,9 +97,10 @@
 
 ### Issue 10: `reviewPending` flag has a race condition
 - **Location:** `src/plan-mode.ts:107, 359, 468`
+- **Status:** ✅ **Fixed** (2026-05-28)
 - **Problem:** `reviewPending` is set to `true` in `reviewPlan()` and cleared in `onAgentEnd()`. But `onAgentEnd` fires for *every* agent end, not just the one after writing a plan. If the agent ends a turn for any other reason (e.g., user sent a follow-up, or the agent hit max turns), `reviewPending` would be cleared prematurely. If the agent then writes a plan in a subsequent turn, `reviewPending` would be `false` so `onAgentEnd` would return early and never show the review menu.
 - **Trigger:** User types a follow-up message while plan is being written.
-- **Fix:** Replace the `reviewPending` flag with a direct check of `planFile.hasSteps()` in `onAgentEnd()`. If steps exist, show the review menu regardless of the flag.
+- **Fix:** Replaced the `reviewPending` flag with a direct check of `planFile.hasSteps()` in `onAgentEnd()`. If steps exist, show the review menu regardless of the flag.
 
 ---
 
@@ -136,7 +137,7 @@
 | 7 | 🟡 Medium | Missing event | No `tool_execution_start`/`end` subscription | plan-mode.ts:772 | ⏸ Irrelevant for now |
 | 8 | 🟡 Medium | Missing event | No `input` event subscription | plan-mode.ts | ⏸ Irrelevant for now |
 | 9 | 🟡 Medium | Dead data | `persistState` writes unused `restoredTools` | plan-mode.ts:381 | ⏳ |
-| 10 | 🟡 Medium | Race condition | `reviewPending` cleared prematurely | plan-mode.ts:107 | ⏳ |
+| 10 | 🟡 Medium | Race condition | `reviewPending` cleared prematurely | plan-mode.ts:107 | ✅ Fixed |
 | 11 | 🟢 Low | UX | Non-UI auto-approve silently does nothing | ui.ts:50 | ⚠️ Partially acceptable |
 | 12 | 🟢 Low | UX | Non-UI mode never shows plan content | ui.ts:48 | 📝 Design issue later |
 | 13 | 🟢 Low | DX | Hardcoded widget key | ui.ts:19 | ✅ Acceptable |
@@ -144,12 +145,12 @@
 ## Priority Ordering for Fixes
 
 1. **Issue 6** — When executing phase has no steps, transition to `idle` (stop execution).
-2. **Issue 10** — Replace `reviewPending` flag with `planFile.hasSteps()` check in `onAgentEnd()`.
-3. **Issue 9** — Remove `restoredTools` from `persistState()` serialization.
+2. **Issue 9** — Remove `restoredTools` from `persistState()` serialization.
 4. **Issue 11** — Log to console in non-UI mode instead of calling `ui.notify()`.
 5. **Issue 12** — Design issue: add headless approval/denial controls (deferred).
 
 > **Fixed:** Issues 2, 5 (resumePlan restores saved phase, 2026-05-27).
 > **Fixed:** Issues 3, 3b, 4 (checkbox widget dismissal across all mode transitions, 2026-05-27).
+> **Fixed:** Issue 10 (`reviewPending` race condition, 2026-05-28).
 > **Deferred:** Issues 7, 8 (irrelevant for now).
 > **Acceptable:** Issues 12 (design issue), 13 (single instance).
