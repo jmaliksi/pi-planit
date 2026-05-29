@@ -5,29 +5,31 @@ Chat-first plan mode for pi.dev — explore safely, save a plan when ready, then
 ## Quick Start
 
 ```bash
-# Start a session in plan mode via flag
---planit
+# start a session in plan mode via flag
+pi --planit
 
-# Or enter plan mode mid-session
+# or enter plan mode mid-session
 /planit
 
-# The agent explores the codebase and discusses the approach in chat
-# (write tools blocked, bash filtered to read-only)
+# you can explore the codebase and discusses the approach in chat while the agent can only use read-only tools.
 
-# When ready, save the current conversation as a plan file
+# when ready, save the current conversation as a plan file
 /planit write
 
-# When ready to implement, restore full tools and inject the plan as context
-/planit build
+# drop out of planning to resume (or not) later
+/planit exit
 
-# Check status at any time
-/planit status
-
-# Resume a past plan
+# resume a past plan
 /planit resume
 
-# Exit plan mode
-/planit exit
+# throw away the plan and exit
+/planit discard
+
+# Or when ready to implement, restore full tools and inject the plan as context
+/planit build
+
+# delete and exit once done
+/planit finish
 ```
 
 ## Features
@@ -100,7 +102,7 @@ When you run `/planit build`, the extension:
 
 In auto mode, the agent immediately starts working through the plan. In manual mode, you remain in control with the plan as background context.
 
-Exit building mode at any time with `/planit exit` or `/planit cancel`.
+Exit building mode at any time with `/planit exit`, `/planit discard`, or `/planit finish`.
 
 ### Session Restoration
 
@@ -123,14 +125,13 @@ Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 | Command | Description |
 |---|---|
 | `/planit` | Toggle (idle ↔ planning) |
-| `/planit on` / `/planit enable` / `/planit start` | Enter planning mode |
-| `/planit off` / `/planit disable` / `/planit stop` / `/planit exit` | Exit to idle (no delete prompt) |
+| `/planit exit` | Exit to idle; shows a build-warning if exiting from building |
+| `/planit discard` | Exit to idle; prompts to delete the plan file if one exists |
+| `/planit finish` | Like discard, but only works from building phase |
 | `/planit write [title]` | Ask the LLM to summarize the chat and save/merge a plan file |
 | `/planit build` | Restore full tools, inject plan as context, optionally auto-execute |
-| `/planit cancel` | Exit to idle; prompts to delete the plan file if one exists |
 | `/planit resume` | Browse past plans via picker; loads selected plan into planning mode |
 | `/planit delete` | Delete a plan file via picker + confirmation |
-| `/planit status` | Show current phase and plan file path |
 
 ## Environment Variables
 
