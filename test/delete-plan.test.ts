@@ -25,8 +25,6 @@ function createMockPI(
         setWidget: vi.fn(),
         select: vi.fn(),
         confirm: vi.fn(),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
       },
     })),
     on: vi.fn(),
@@ -57,7 +55,7 @@ function createPlanFile(cwd: string, filename: string, content: string): string 
 
 // ── Tests ────────────────────────────────────────────────────────────
 
-describe("PlanMode — plan deletion and discard", () => {
+describe("PlanMode — plan deletion", () => {
   let backupHome: string | undefined;
   let tmpHome: string;
 
@@ -82,8 +80,6 @@ describe("PlanMode — plan deletion and discard", () => {
     }
   });
 
-  // ── deletePlan ─────────────────────────────────────────────────
-
   describe("deletePlan", () => {
     it("notifies when no plans exist", async () => {
       const { pi } = createMockPI();
@@ -97,8 +93,6 @@ describe("PlanMode — plan deletion and discard", () => {
         setWidget: vi.fn(),
         select: vi.fn(),
         confirm: vi.fn(),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
       };
 
       await (pm as any).deletePlan(ctx);
@@ -109,7 +103,7 @@ describe("PlanMode — plan deletion and discard", () => {
     it("deletes selected plan with confirmation", async () => {
       const { pi } = createMockPI();
       const cwd = "/tmp/test-project";
-      const planPath = createPlanFile(cwd, "test-plan-2026-01-01T00-00-00.md", "# Test Plan\n## Summary\n\n## Steps\n- [ ] Step 1\n");
+      const planPath = createPlanFile(cwd, "test-plan-2026-01-01T00-00-00.md", "# Test Plan\n");
       const pm = new PlanMode(pi);
       const ctx = pi.getContext()!;
       (ctx as any).hasUI = true;
@@ -120,8 +114,6 @@ describe("PlanMode — plan deletion and discard", () => {
         setWidget: vi.fn(),
         select: vi.fn().mockImplementation((_title: string, opts: string[]) => opts[0]),
         confirm: vi.fn().mockResolvedValue(true),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
       };
 
       await (pm as any).deletePlan(ctx);
@@ -133,7 +125,7 @@ describe("PlanMode — plan deletion and discard", () => {
     it("cancels deletion when user denies confirmation", async () => {
       const { pi } = createMockPI();
       const cwd = "/tmp/test-project";
-      const planPath = createPlanFile(cwd, "test-plan-2026-01-01T00-00-00.md", "# Test Plan\n## Summary\n\n## Steps\n- [ ] Step 1\n");
+      const planPath = createPlanFile(cwd, "test-plan-2026-01-01T00-00-00.md", "# Test Plan\n");
       const pm = new PlanMode(pi);
       const ctx = pi.getContext()!;
       (ctx as any).hasUI = true;
@@ -144,8 +136,6 @@ describe("PlanMode — plan deletion and discard", () => {
         setWidget: vi.fn(),
         select: vi.fn().mockImplementation((_title: string, opts: string[]) => opts[0]),
         confirm: vi.fn().mockResolvedValue(false),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
       };
 
       await (pm as any).deletePlan(ctx);
@@ -168,8 +158,6 @@ describe("PlanMode — plan deletion and discard", () => {
         setWidget: vi.fn(),
         select: vi.fn().mockResolvedValue(undefined),
         confirm: vi.fn(),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
       };
 
       await (pm as any).deletePlan(ctx);
@@ -195,169 +183,12 @@ describe("PlanMode — plan deletion and discard", () => {
         setWidget: vi.fn(),
         select: vi.fn(),
         confirm: vi.fn(),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
       };
 
       await (pm as any).deletePlan(ctx);
 
       expect(fs.existsSync(newerPath)).toBe(false);
       expect(fs.existsSync(olderPath)).toBe(true);
-    });
-  });
-
-  // ── discardPlan ────────────────────────────────────────────────
-
-  describe("discardPlan", () => {
-    it("notifies when no active plan", async () => {
-      const { pi } = createMockPI();
-      const pm = new PlanMode(pi);
-      const ctx = pi.getContext()!;
-      (ctx as any).hasUI = true;
-      const notify = vi.fn();
-      ctx.ui = {
-        notify,
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn(),
-        confirm: vi.fn(),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
-      };
-
-      await (pm as any).discardPlan(ctx);
-
-      expect(notify).toHaveBeenCalledWith("No active plan to discard.", "info");
-    });
-
-    it("discards active plan with confirmation", async () => {
-      const { pi } = createMockPI();
-      const cwd = "/tmp/test-project";
-      const planPath = createPlanFile(cwd, "active-plan-2026-01-01T00-00-00.md", "# Active\n## Steps\n- [ ] Step 1\n");
-      const pm = new PlanMode(pi);
-      const ctx = pi.getContext()!;
-      (ctx as any).hasUI = true;
-      const notify = vi.fn();
-      ctx.ui = {
-        notify,
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn(),
-        confirm: vi.fn().mockResolvedValue(true),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
-      };
-      (pm as any).planFile.load(planPath);
-
-      await (pm as any).discardPlan(ctx);
-
-      expect(fs.existsSync(planPath)).toBe(false);
-      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Plan discarded:"), "info");
-      expect((pm as any).planFile.getFilePath()).toBe("");
-    });
-
-    it("cancels discard when user denies confirmation", async () => {
-      const { pi } = createMockPI();
-      const cwd = "/tmp/test-project";
-      const planPath = createPlanFile(cwd, "active-plan-2026-01-01T00-00-00.md", "# Active\n## Steps\n- [ ] Step 1\n");
-      const pm = new PlanMode(pi);
-      const ctx = pi.getContext()!;
-      (ctx as any).hasUI = true;
-      const notify = vi.fn();
-      ctx.ui = {
-        notify,
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn(),
-        confirm: vi.fn().mockResolvedValue(false),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
-      };
-      (pm as any).planFile.load(planPath);
-
-      await (pm as any).discardPlan(ctx);
-
-      expect(fs.existsSync(planPath)).toBe(true);
-      expect(notify).toHaveBeenCalledWith("Discard cancelled.", "info");
-      expect((pm as any).planFile.getFilePath()).toBe(planPath);
-    });
-
-    it("discards without UI (no confirm)", async () => {
-      const { pi } = createMockPI();
-      const cwd = "/tmp/test-project";
-      const planPath = createPlanFile(cwd, "active-plan-2026-01-01T00-00-00.md", "# Active\n## Steps\n- [ ] Step 1\n");
-      const pm = new PlanMode(pi);
-      const ctx = pi.getContext()!;
-      (ctx as any).hasUI = false;
-      ctx.ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn(),
-        confirm: vi.fn(),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
-      };
-      (pm as any).planFile.load(planPath);
-
-      await (pm as any).discardPlan(ctx);
-
-      expect(fs.existsSync(planPath)).toBe(false);
-      expect((pm as any).planFile.getFilePath()).toBe("");
-    });
-
-    it("discards from executing mode", async () => {
-      const { pi, calls } = createMockPI([{ name: "read" }, { name: "edit" }]);
-      const cwd = "/tmp/test-project";
-      const planPath = createPlanFile(cwd, "exec-plan-2026-01-01T00-00-00.md", "# Exec\n## Steps\n- [ ] Step 1\n");
-      const pm = new PlanMode(pi);
-      const ctx = pi.getContext()!;
-      (ctx as any).hasUI = true;
-      const notify = vi.fn();
-      ctx.ui = {
-        notify,
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn(),
-        confirm: vi.fn().mockResolvedValue(true),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
-      };
-      (pm as any).planFile.load(planPath);
-      (pm as any).phase = "executing";
-      (pm as any).restoredTools = ["read", "edit"];
-
-      await (pm as any).discardPlan(ctx);
-
-      expect(fs.existsSync(planPath)).toBe(false);
-      expect((pm as any).phase).toBe("idle");
-      // setActiveTools should have been called to restore full tool set
-      expect(calls.length).toBeGreaterThan(0);
-    });
-
-    it("gracefully handles missing plan file on disk", async () => {
-      const { pi } = createMockPI();
-      const cwd = "/tmp/test-project";
-      const ghostPath = path.join(plansDir(cwd), "ghost-plan-2026-01-01T00-00-00.md");
-      const pm = new PlanMode(pi);
-      const ctx = pi.getContext()!;
-      (ctx as any).hasUI = true;
-      const notify = vi.fn();
-      ctx.ui = {
-        notify,
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn(),
-        confirm: vi.fn().mockResolvedValue(true),
-        showPlanningWidget: vi.fn(),
-        editor: vi.fn(),
-      };
-      (pm as any).planFile.filePath = ghostPath;
-
-      await (pm as any).discardPlan(ctx);
-
-      expect(notify).toHaveBeenCalledWith("Plan file not found on disk.", "warning");
-      expect((pm as any).planFile.getFilePath()).toBe("");
     });
   });
 });

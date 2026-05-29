@@ -1,7 +1,7 @@
 # Repo: pi-planit
 
 ## Purpose
-Extension for pi.dev providing headless plan mode — safe codebase exploration with read-only tool gating, file-based planning, and a TUI review/execution workflow.
+Extension for pi.dev providing chat-first plan mode — safe codebase exploration with read-only tool gating, optional file-based plan saving, and a user-controlled build workflow.
 
 ## Tech Stack
 - TypeScript (tsc compiler)
@@ -9,24 +9,24 @@ Extension for pi.dev providing headless plan mode — safe codebase exploration 
 - Dependencies: `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, TypeBox
 
 ## Key Concepts
-- **Plan Mode** — read-only exploration session where `edit`/`write`/`ast_rewrite` are blocked, and `bash` is filtered through a whitelist/denylist
-- **Plan File** — written via `write_plan` tool, stored at `~/.pi/agent/plans/<sanitized-project>/<name-timestamp>.md`, contains checklist with `- [ ]` items
-- **Phases** — 4 independent states: `idle`, `planning`, `planned`, `executing`
+- **Plan Mode** — chat-first read-only exploration session where `edit`/`write`/`ast_rewrite` are blocked, and `bash` is filtered through a whitelist/denylist
+- **Plan File** — optional; written via `/planit write`, stored at `~/.pi/agent/plans/<sanitized-project>/<name-timestamp>.md`, free-form markdown
+- **Phases** — 3 states: `idle`, `planning`, `building`
 - **Session restoration** — phase, plan content, and tool set are persisted in session history and restored on restart
 
 ## Source Map
 | File | Responsibility |
 |---|---|
 | `src/index.ts` | Extension entry point — registers PlanMode instance |
-| `src/plan-mode.ts` | Core state machine: enter/exit, tool gating, system prompt injection, review flow, session lifecycle |
-| `src/plan-file.ts` | Plan file I/O, checklist parsing, storage paths, `listPlans()` |
+| `src/plan-mode.ts` | Core state machine: enter/exit, tool gating, system prompt injection, session lifecycle |
+| `src/plan-file.ts` | Plan file I/O, storage paths, `listPlans()` |
 | `src/bash-filter.ts` | Whitelist/denylist for bash commands in plan mode |
-| `src/ui.ts` | TUI menus, status bar, plan widget rendering |
-| `src/types.ts` | Shared type definitions (PlanPhase, PlanModeConfig, ChecklistItem) |
+| `src/ui.ts` | Status bar, plan widget, build prompt dialog |
+| `src/types.ts` | Shared type definitions (PlanPhase, PlanModeConfig) |
 | `src/path-utils.ts` | Path resolution helpers |
 
 ## Commands (user-facing)
-`/planit` toggle · `/planit on` · `/planit off` · `/planit review` · `/planit resume` · `/planit cancel` · `/planit delete` · `/planit discard` · `/planit status`
+`/planit` toggle · `/planit on` · `/planit off` · `/planit write [title]` · `/planit build` · `/planit cancel` · `/planit exit` · `/planit resume` · `/planit delete` · `/planit status`
 
 ## Build & Test
 ```bash
@@ -39,26 +39,20 @@ npm run dev      # tsc --watch
 
 ## State Machine
 ```
-idle ──/planit──> planning ──agent writes plan──> planned
-                  (read-only)    (auto)              │ user does work
-                                                     │ themselves,
-                                                     │ checks off items
-                                                     │
-planned ──/planit review──> executing (auto-build)   │
-                                                     │
-planned ──/planit cancel──> planning (edit more)     │
-                                                     │
-planned ──/planit off──> idle                        │
-executing ──all steps done──> idle                   │
-executing ──/planit cancel──> planning               │
-                                                    │
-idle ──/planit off──> idle (no-op) ──────────────────+
+idle ──/planit──> planning (read-only tools + filtered bash)
+                      │
+                      ├── /planit write ──> LLM summarizes chat, writes/merges plan file, stays in planning
+                      │
+                      ├── /planit build ──> UI asks "auto or user-driven?" ──> building (full tools)
+                      │                                                              │
+                      │                                                    /planit exit/cancel/off ──> idle
+                      │
+                      └── /planit cancel ──> (confirm delete if plan file exists) ──> idle
 ```
 
 - `idle` — normal operation, full tool access
-- `planning` — read-only tools + filtered bash. Agent explores and writes plan.
-- `planned` — full tools restored. User in control. Plan is a reference checklist. Agent does NOT auto-execute.
-- `executing` — full tools restored. Agent auto-runs approved plan steps with `[DONE:n]` progress tracking.
+- `planning` — read-only tools + filtered bash. Agent explores and discusses in chat. No auto plan writing.
+- `building` — full tools restored. Plan injected as context. Agent executes (auto) or user drives.
 
 ## Conventions
 - Tests mirror source structure: `src/foo.ts` → `test/foo.test.ts`

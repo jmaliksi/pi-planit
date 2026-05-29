@@ -5,45 +5,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { PlanMode } from "../src/plan-mode";
 import { PlanFile } from "../src/plan-file";
 
-// ── mark_plan_step tool test helper ──────────────────────────────────
-
-function createPIWithPlan(
-  phase: "planning" | "executing" | "planned" | "idle" = "planning",
-  planContent?: string,
-): { pi: ExtensionAPI; calls: string[][]; pm: PlanMode } {
-  const fullTools = [
-    { name: "read" },
-    { name: "write" },
-    { name: "edit" },
-    { name: "bash" },
-  ];
-  const { pi, calls } = createMockPI(fullTools);
-
-  const pm = new PlanMode(pi);
-  const ctx = pi.getContext()!;
-  (ctx as any).ui = {
-    notify: vi.fn(),
-    setStatus: vi.fn(),
-    setWidget: vi.fn(),
-    showPlanningWidget: vi.fn(),
-  };
-
-  // Initialize plan file
-  pm.cwd = ctx.cwd;
-  if (planContent) {
-    const filePath = path.join(ctx.cwd, "plan.md");
-    fs.mkdirSync(ctx.cwd, { recursive: true });
-    fs.writeFileSync(filePath, planContent, "utf-8");
-    pm.planFile.load(filePath, planContent);
-    pm.phase = phase;
-  }
-
-  // Register tools to activate them
-  pm.register(pi);
-
-  return { pi, calls, pm };
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function createMockPI(
@@ -52,24 +13,21 @@ function createMockPI(
   const calls: string[][] = [];
 
   const pi = {
-    getAllTools: vi.fn(
-      () => availableTools,
-    ),
+    getAllTools: vi.fn(() => availableTools),
     setActiveTools: vi.fn((tools: string[]) => {
       calls.push([...tools]);
     }),
-    getContext: vi.fn(
-      () => ({
-        hasUI: false,
-        cwd: "/tmp/test-project",
-        ui: {
-          notify: vi.fn(),
-          setStatus: vi.fn(),
-          setWidget: vi.fn(),
-          select: vi.fn(),
-        },
-      }),
-    ),
+    getContext: vi.fn(() => ({
+      hasUI: false,
+      cwd: "/tmp/test-project",
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        select: vi.fn(),
+        confirm: vi.fn(),
+      },
+    })),
     on: vi.fn(),
     registerCommand: vi.fn(),
     registerFlag: vi.fn(),
@@ -110,9 +68,8 @@ describe("PlanMode — tool restoration", () => {
       const pm = new PlanMode(mockPI.pi);
       const ctx = mockPI.pi.getContext()!;
 
-      pm.enterPlanning(ctx);
+      (pm as any).enterPlanning(ctx);
 
-      // First call: set to read-only tools
       const firstCall = mockPI.calls[0];
       expect(firstCall).toContain("read");
       expect(firstCall).toContain("bash");
@@ -122,25 +79,22 @@ describe("PlanMode — tool restoration", () => {
     });
   });
 
-  describe("build", () => {
+  describe("exitToIdle", () => {
     it("restores the full captured tool set", () => {
       const fullTools = [
         { name: "read" },
         { name: "edit" },
         { name: "write" },
-        { name: "bash" },
-        { name: "grep" },
-        { name: "find" },
       ];
       mockPI = createMockPI(fullTools);
 
       const pm = new PlanMode(mockPI.pi);
       const ctx = mockPI.pi.getContext()!;
 
-      pm.enterPlanning(ctx);
+      (pm as any).enterPlanning(ctx);
 
       const callsBefore = mockPI.calls.length;
-      pm.build("auto", ctx);
+      (pm as any).exitToIdle(ctx);
 
       expect(mockPI.calls.length).toBeGreaterThan(callsBefore);
 
@@ -149,46 +103,35 @@ describe("PlanMode — tool restoration", () => {
         expect(lastCall).toContain(tool.name);
       }
     });
-  });
 
-  describe("exitPlanning", () => {
-    it("restores the full captured tool set", () => {
-      const fullTools = [
-        { name: "read" },
-        { name: "edit" },
-        { name: "write" },
-      ];
+    it("transitions to idle from planning", () => {
+      const fullTools = [{ name: "read" }, { name: "write" }];
       mockPI = createMockPI(fullTools);
 
       const pm = new PlanMode(mockPI.pi);
       const ctx = mockPI.pi.getContext()!;
 
-      pm.enterPlanning(ctx);
+      (pm as any).enterPlanning(ctx);
+      expect(pm.isPlanMode).toBe(true);
 
-      const callsBefore = mockPI.calls.length;
-      pm.exitPlanning(ctx);
+      (pm as any).exitToIdle(ctx);
 
-      expect(mockPI.calls.length).toBeGreaterThan(callsBefore);
-
-      const lastCall = mockPI.calls[mockPI.calls.length - 1];
-      for (const tool of fullTools) {
-        expect(lastCall).toContain(tool.name);
-      }
+      expect(pm.isPlanMode).toBe(false);
+      expect(pm.isBuilding).toBe(false);
     });
   });
 });
 
-// ── Phase 5 Tests: Execution Commands ────────────────────────────────
+// ── Phase 2 Tests: cancelPlan ─────────────────────────────────────────
 
-describe("PlanMode — Phase 5: Execution commands", () => {
-  let mockPI: ReturnType<typeof createMockPI>;
+describe("PlanMode — cancelPlan", () => {
   let backupHome: string | undefined;
   let tmpHome: string;
 
   beforeEach(() => {
     vi.restoreAllMocks();
     backupHome = process.env.HOME;
-    tmpHome = "/tmp/planit-test-home-" + Date.now();
+    tmpHome = "/tmp/planit-cancel-test-" + Date.now();
     process.env.HOME = tmpHome;
   });
 
@@ -199,652 +142,364 @@ describe("PlanMode — Phase 5: Execution commands", () => {
     } else {
       delete process.env.HOME;
     }
-    // Cleanup temp dirs
-    try {
-      fs.rmSync(tmpHome, { recursive: true, force: true });
-    } catch {
-      // ignore
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("notifies nothing to cancel from idle", async () => {
+    const { pi } = createMockPI();
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const notify = vi.fn();
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify, setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn(), confirm: vi.fn() };
+
+    await (pm as any).cancelPlan(ctx);
+
+    expect(pm.isPlanMode).toBe(false);
+    expect(pm.isBuilding).toBe(false);
+    expect(notify).toHaveBeenCalledWith("Nothing to cancel.", "info");
+  });
+
+  it("exits to idle from planning without plan file", async () => {
+    const { pi } = createMockPI([{ name: "read" }, { name: "write" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn(), confirm: vi.fn() };
+
+    (pm as any).enterPlanning(ctx);
+    expect(pm.isPlanMode).toBe(true);
+
+    await (pm as any).cancelPlan(ctx);
+
+    expect(pm.isPlanMode).toBe(false);
+  });
+
+  it("asks to delete plan file if one exists during cancel", async () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const confirm = vi.fn().mockResolvedValue(true);
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn(), confirm };
+
+    // Set up a plan file
+    const planDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+    fs.mkdirSync(planDir, { recursive: true });
+    const planPath = path.join(planDir, "test-plan-2026-01-01T00-00-00.md");
+    fs.writeFileSync(planPath, "# Test Plan\n");
+    (pm as any).planFile.load(planPath);
+    (pm as any).phase = "planning";
+    (pm as any).restoredTools = ["read"];
+
+    await (pm as any).cancelPlan(ctx);
+
+    expect(confirm).toHaveBeenCalled();
+    expect(fs.existsSync(planPath)).toBe(false);
+    expect(pm.isPlanMode).toBe(false);
+  });
+
+  it("keeps plan file if user declines deletion", async () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const confirm = vi.fn().mockResolvedValue(false);
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn(), confirm };
+
+    const planDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+    fs.mkdirSync(planDir, { recursive: true });
+    const planPath = path.join(planDir, "test-plan-2026-01-01T00-00-00.md");
+    fs.writeFileSync(planPath, "# Test Plan\n");
+    (pm as any).planFile.load(planPath);
+    (pm as any).phase = "planning";
+    (pm as any).restoredTools = ["read"];
+
+    await (pm as any).cancelPlan(ctx);
+
+    expect(fs.existsSync(planPath)).toBe(true);
+    expect(pm.isPlanMode).toBe(false);
+  });
+});
+
+// ── Phase 3 Tests: resumePlan ─────────────────────────────────────────
+
+describe("PlanMode — resumePlan", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-resume-test-" + Date.now();
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
     }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  describe("cancelPlan", () => {
-    it("returns to planning from executing", () => {
-      const fullTools = [
-        { name: "read" },
-        { name: "write" },
-        { name: "edit" },
-      ];
-      mockPI = createMockPI(fullTools);
+  it("notifies when no plans exist", async () => {
+    const { pi } = createMockPI();
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const notify = vi.fn();
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify, setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn().mockResolvedValue(undefined), confirm: vi.fn() };
 
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      pm.enterPlanning(ctx);
-      pm.build("auto", ctx);
-      expect(pm.isExecuting).toBe(true);
-
-      // Mock the UI context for getUiContext
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn(),
-      };
-
-      pm.cancelPlan(ctx);
-
-      expect(pm.isPlanMode).toBe(true);
-      expect(pm.isExecuting).toBe(false);
-    });
-
-    it("exits to idle from planning", () => {
-      const fullTools = [
-        { name: "read" },
-        { name: "write" },
-      ];
-      mockPI = createMockPI(fullTools);
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      pm.enterPlanning(ctx);
-      expect(pm.isPlanMode).toBe(true);
-
-      pm.cancelPlan(ctx);
-
-      expect(pm.isPlanMode).toBe(false);
-      expect(pm.isExecuting).toBe(false);
-    });
-
-    it("notifies nothing to cancel from idle", () => {
-      mockPI = createMockPI();
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn(),
-      };
-
-      pm.cancelPlan(ctx);
-
-      expect(pm.isPlanMode).toBe(false);
-      expect(pm.isExecuting).toBe(false);
-    });
+    await (pm as any).resumePlan(ctx);
+    expect(notify).toHaveBeenCalledWith("No plans found for this project.", "info");
   });
 
-  describe("resumePlan", () => {
-    it("notifies when no plans exist", async () => {
-      mockPI = createMockPI();
+  it("loads plan from disk in non-UI mode and enters planning", async () => {
+    const projectDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const planPath = path.join(projectDir, "migrate-auth-2026-01-01T00-00-00.md");
+    fs.writeFileSync(planPath, "# Migrate Auth\n\nSome plan content.");
 
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-      const notifyMock = vi.fn();
-      (ctx as any).hasUI = true;
-      (ctx as any).ui = {
-        notify: notifyMock,
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn().mockResolvedValue(undefined),
-      };
+    const { pi } = createMockPI([{ name: "read" }, { name: "bash" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    (ctx as any).hasUI = false;
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn(), confirm: vi.fn() };
 
-      await pm.resumePlan(ctx);
-      expect(notifyMock).toHaveBeenCalledWith("No plans found for this project.", "info");
-    });
+    await (pm as any).resumePlan(ctx);
 
-    it("loads plan from disk when UI is absent", async () => {
-      // Create a test plan file in the same project path as the mock context
-      const home = process.env.HOME!;
-      const projectDir = path.join(home, ".pi", "agent", "plans", "--tmp--test-project");
-      fs.mkdirSync(projectDir, { recursive: true });
+    expect(pm.isPlanMode).toBe(true);
+    expect((pm as any).planFile.getFilePath()).toBe(planPath);
+    expect((pm as any).planFile.getTitle()).toBe("Migrate Auth");
+  });
+});
 
-      const planPath = path.join(projectDir, "migrate-auth-2026-01-01T00-00-00.md");
-      const planContent = `---
-title: "Migrate Auth"
-summary: ""
-steps:
-  - index: 1
-    text: "Update auth module"
-    completed: false
----
+// ── Phase 4 Tests: restoreState ───────────────────────────────────────
 
-## Plan Details
+describe("PlanMode — restoreState", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
 
-## Assumptions and Reference
-`;
-      fs.writeFileSync(planPath, planContent);
-
-      mockPI = createMockPI();
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-      (ctx as any).sessionManager = {
-        getBranch: () => [
-          {
-            type: "custom",
-            customType: "planit",
-            data: {
-              phase: "planning",
-              planFilePath: planPath,
-              planContent,
-              restoredTools: ["read"],
-            },
-          },
-        ],
-      };
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        select: vi.fn().mockResolvedValue(undefined),
-      };
-
-      await pm.resumePlan(ctx);
-
-      expect(pm.isPlanMode).toBe(true);
-      expect(pm.planFile.getFilePath()).toBe(planPath);
-      expect(pm.planFile.getTotalSteps()).toBe(1);
-    });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-restore-test-" + Date.now();
+    process.env.HOME = tmpHome;
   });
 
-  describe("restoreState", () => {
-    let mockPI: ReturnType<typeof createMockPI>;
-    let backupHome: string | undefined;
-    let tmpHome: string;
-
-    beforeEach(() => {
-      vi.restoreAllMocks();
-      backupHome = process.env.HOME;
-      tmpHome = "/tmp/planit-restore-test-home-" + Date.now();
-      process.env.HOME = tmpHome;
-    });
-
-    afterEach(() => {
-      vi.restoreAllMocks();
-      if (backupHome !== undefined) {
-        process.env.HOME = backupHome;
-      } else {
-        delete process.env.HOME;
-      }
-      try {
-        fs.rmSync(tmpHome, { recursive: true, force: true });
-      } catch { /* ignore */ }
-    });
-
-    it("does nothing when no planit entry exists", () => {
-      const fullTools = [{ name: "read" }, { name: "edit" }];
-      mockPI = createMockPI(fullTools);
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      // Create a mock sessionManager with no planit entries
-      (ctx as any).sessionManager = { getBranch: () => [] };
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-      };
-
-      pm.restoreState(ctx);
-
-      expect(pm.isPlanMode).toBe(false);
-      expect(pm.isExecuting).toBe(false);
-    });
-
-    it("does nothing when planit entry has idle phase", () => {
-      const fullTools = [{ name: "read" }, { name: "edit" }];
-      mockPI = createMockPI(fullTools);
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      (ctx as any).sessionManager = {
-        getBranch: () => [
-          { type: "custom", customType: "planit", data: { phase: "idle" } },
-        ],
-      };
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-      };
-
-      pm.restoreState(ctx);
-
-      expect(pm.isPlanMode).toBe(false);
-    });
-
-    it("restores planning mode from a planit entry", () => {
-      const fullTools = [
-        { name: "read" },
-        { name: "edit" },
-        { name: "write" },
-      ];
-      mockPI = createMockPI(fullTools);
-
-      // Create a plan file on disk
-      const projectDir = path.join(
-        tmpHome,
-        ".pi",
-        "agent",
-        "plans",
-        "--tmp--test-project",
-      );
-      fs.mkdirSync(projectDir, { recursive: true });
-      const planPath = path.join(projectDir, "test-plan-2026-01-01T00-00-00.md");
-      const planContent = `---
-title: "Test Plan"
-summary: "A test."
-steps:
-  - index: 1
-    text: "Step 1"
-    completed: false
-  - index: 2
-    text: "Step 2"
-    completed: false
----
-
-## Plan Details
-
-## Assumptions and Reference
-`;
-      fs.writeFileSync(planPath, planContent);
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      (ctx as any).sessionManager = {
-        getBranch: () => [
-          {
-            type: "custom",
-            customType: "planit",
-            data: {
-              phase: "planning",
-              planFilePath: planPath,
-              planContent,
-              restoredTools: ["read", "edit", "write"],
-            },
-          },
-        ],
-      };
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        showPlanningWidget: vi.fn(),
-      };
-
-      pm.restoreState(ctx);
-
-      expect(pm.isPlanMode).toBe(true);
-      expect(pm.isExecuting).toBe(false);
-      expect(pm.planFile.getFilePath()).toBe(planPath);
-      expect(pm.planFile.getTotalSteps()).toBe(2);
-    });
-
-    it("restores executing mode from a planit entry", () => {
-      const fullTools = [
-        { name: "read" },
-        { name: "edit" },
-        { name: "write" },
-        { name: "bash" },
-      ];
-      mockPI = createMockPI(fullTools);
-
-      // Create a plan file with one completed step
-      const projectDir = path.join(
-        tmpHome,
-        ".pi",
-        "agent",
-        "plans",
-        "--tmp--test-project",
-      );
-      fs.mkdirSync(projectDir, { recursive: true });
-      const planPath = path.join(projectDir, "exec-plan-2026-01-01T00-00-00.md");
-      const planContent = `---
-title: "Exec Plan"
-summary: "Exec."
-steps:
-  - index: 1
-    text: "Step 1"
-    completed: true
-  - index: 2
-    text: "Step 2"
-    completed: false
----
-
-## Plan Details
-
-## Assumptions and Reference
-`;
-      fs.writeFileSync(planPath, planContent);
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      (ctx as any).sessionManager = {
-        getBranch: () => [
-          {
-            type: "custom",
-            customType: "planit",
-            data: {
-              phase: "executing",
-              planFilePath: planPath,
-              planContent,
-              restoredTools: ["read", "edit", "write", "bash"],
-            },
-          },
-        ],
-      };
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        showPlanningWidget: vi.fn(),
-      };
-
-      pm.restoreState(ctx);
-
-      expect(pm.isExecuting).toBe(true);
-      expect(pm.isPlanMode).toBe(false);
-      expect(pm.planFile.getCompletedSteps()).toBe(1);
-      expect(pm.planFile.getTotalSteps()).toBe(2);
-    });
-
-    it("falls back to loading plan file from disk when content is missing", () => {
-      const fullTools = [{ name: "read" }];
-      mockPI = createMockPI(fullTools);
-
-      const projectDir = path.join(
-        tmpHome,
-        ".pi",
-        "agent",
-        "plans",
-        "--tmp--test-project",
-      );
-      fs.mkdirSync(projectDir, { recursive: true });
-      const planPath = path.join(projectDir, "fallback-plan-2026-01-01T00-00-00.md");
-      const planContent = `---
-title: "Fallback"
-summary: ""
-steps:
-  - index: 1
-    text: "Fallback step"
-    completed: false
----
-
-## Plan Details
-
-## Assumptions and Reference
-`;
-      fs.writeFileSync(
-        planPath,
-        planContent,
-      );
-
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      (ctx as any).sessionManager = {
-        getBranch: () => [
-          {
-            type: "custom",
-            customType: "planit",
-            data: {
-              phase: "planning",
-              planFilePath: planPath,
-              // No planContent — should fall back to loading from disk
-              restoredTools: ["read"],
-            },
-          },
-        ],
-      };
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        showPlanningWidget: vi.fn(),
-      };
-
-      pm.restoreState(ctx);
-
-      expect(pm.isPlanMode).toBe(true);
-      expect(pm.planFile.getTotalSteps()).toBe(1);
-    });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  describe("session_tree", () => {
-    it("reconstructs state on tree navigation", () => {
-      const fullTools = [{ name: "read" }, { name: "edit" }];
-      const mockPI = createMockPI(fullTools);
+  it("does nothing when no planit entry exists", () => {
+    const { pi } = createMockPI([{ name: "read" }, { name: "edit" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    (ctx as any).sessionManager = { getBranch: () => [] };
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() };
 
-      const projectDir = path.join(
-        process.env.HOME!,
-        ".pi",
-        "agent",
-        "plans",
-        "--tmp--test-project",
-      );
-      fs.mkdirSync(projectDir, { recursive: true });
-      const planPath = path.join(projectDir, "tree-plan-2026-01-01T00-00-00.md");
-      const planContent =
-        "# Tree Plan\n## Summary\n\n## Steps\n- [ ] Tree step\n";
-      fs.writeFileSync(planPath, planContent);
+    (pm as any).restoreState(ctx);
 
-      const pm = new PlanMode(mockPI.pi);
-      const ctx = mockPI.pi.getContext()!;
-
-      // Simulate tree navigation that restores planning
-      (ctx as any).sessionManager = {
-        getBranch: () => [
-          {
-            type: "custom",
-            customType: "planit",
-            data: {
-              phase: "planning",
-              planFilePath: planPath,
-              planContent,
-              restoredTools: ["read"],
-            },
-          },
-        ],
-      };
-      (ctx as any).ui = {
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        showPlanningWidget: vi.fn(),
-      };
-
-      pm.restoreState(ctx);
-
-      expect(pm.isPlanMode).toBe(true);
-    });
+    expect(pm.isPlanMode).toBe(false);
+    expect(pm.isBuilding).toBe(false);
   });
 
-  describe("PlanFile.listPlans", () => {
-    it("returns empty array when no plans exist", () => {
-      const plans = (PlanFile as any).listPlans("/tmp/nonexistent-project");
-      expect(plans).toEqual([]);
-    });
+  it("does nothing when planit entry has idle phase", () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    (ctx as any).sessionManager = {
+      getBranch: () => [{ type: "custom", customType: "planit", data: { phase: "idle" } }],
+    };
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() };
 
-    it("lists available plans sorted by modification time", () => {
-      const home = process.env.HOME!;
-      // Use the same project path that listPlans("/tmp/test") resolves to
-      const projectDir = path.join(home, ".pi", "agent", "plans", "--tmp--test");
-      fs.mkdirSync(projectDir, { recursive: true });
-
-      const older = path.join(projectDir, "old-plan-2026-01-01T00-00-00.md");
-      const newer = path.join(projectDir, "new-plan-2026-06-01T00-00-00.md");
-
-      fs.writeFileSync(older, "# Old");
-      fs.writeFileSync(newer, "# New");
-
-      // Make sure older is actually older
-      const oldTime = new Date("2026-01-01");
-      fs.utimesSync(older, oldTime, oldTime);
-
-      const plans = (PlanFile as any).listPlans("/tmp/test");
-      expect(plans.length).toBe(2);
-      expect(plans[0].filename).toBe("new-plan-2026-06-01T00-00-00.md");
-      expect(plans[1].filename).toBe("old-plan-2026-01-01T00-00-00.md");
-    });
+    (pm as any).restoreState(ctx);
+    expect(pm.isPlanMode).toBe(false);
   });
 
-  describe("mark_plan_step tool", () => {
-    let backupHome: string | undefined;
+  it("restores planning mode from a planit entry", () => {
+    const { pi } = createMockPI([{ name: "read" }, { name: "edit" }, { name: "write" }]);
 
-    beforeEach(() => {
-      vi.restoreAllMocks();
-      backupHome = process.env.HOME;
-      process.env.HOME = "/tmp/planit-mark-plan-test-home";
-      fs.rmSync(process.env.HOME, { recursive: true, force: true });
-    });
+    const projectDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const planPath = path.join(projectDir, "test-plan-2026-01-01T00-00-00.md");
+    const planContent = "# Test Plan\n\nSome plan details.";
+    fs.writeFileSync(planPath, planContent);
 
-    afterEach(() => {
-      vi.restoreAllMocks();
-      if (backupHome) {
-        process.env.HOME = backupHome;
-      } else {
-        delete process.env.HOME;
-      }
-      try {
-        fs.rmSync(process.env.HOME, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
-    });
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    (ctx as any).sessionManager = {
+      getBranch: () => [{
+        type: "custom",
+        customType: "planit",
+        data: { phase: "planning", planFilePath: planPath, planContent, restoredTools: ["read", "edit", "write"] },
+      }],
+    };
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() };
 
-    it("returns error when not in executing phase", () => {
-      const planContent = `---
-title: "Test"
-summary: ""
-steps:
-  - index: 1
-    text: "Step 1"
-    completed: false
-  - index: 2
-    text: "Step 2"
-    completed: false
----
+    (pm as any).restoreState(ctx);
 
-## Plan Details
-`;
-      const { pm } = createPIWithPlan("planned", planContent);
+    expect(pm.isPlanMode).toBe(true);
+    expect(pm.isBuilding).toBe(false);
+    expect((pm as any).planFile.getFilePath()).toBe(planPath);
+    expect((pm as any).planFile.getTitle()).toBe("Test Plan");
+  });
 
-      // Phase gate: isExecuting should be false
-      expect(pm.isExecuting).toBe(false);
-      expect(pm.isPlanned).toBe(true);
-    });
+  it("restores building mode from a planit entry", () => {
+    const { pi } = createMockPI([{ name: "read" }, { name: "edit" }, { name: "write" }]);
 
-    it("marks steps as completed when in executing phase", () => {
-      const planContent = `---
-title: "Test"
-summary: ""
-steps:
-  - index: 1
-    text: "Step 1"
-    completed: false
-  - index: 2
-    text: "Step 2"
-    completed: false
----
+    const projectDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const planPath = path.join(projectDir, "build-plan-2026-01-01T00-00-00.md");
+    const planContent = "# Build Plan\n\nImplementation details.";
+    fs.writeFileSync(planPath, planContent);
 
-## Plan Details
-`;
-      const { pm } = createPIWithPlan("executing", planContent);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    (ctx as any).sessionManager = {
+      getBranch: () => [{
+        type: "custom",
+        customType: "planit",
+        data: { phase: "building", planFilePath: planPath, planContent, restoredTools: ["read", "edit", "write"] },
+      }],
+    };
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() };
 
-      expect(pm.planFile.getCompletedSteps()).toBe(0);
-      expect(pm.planFile.getTotalSteps()).toBe(2);
+    (pm as any).restoreState(ctx);
 
-      // Call markCompleted directly to simulate tool behavior
-      pm.planFile.markCompleted([1]);
+    expect(pm.isBuilding).toBe(true);
+    expect(pm.isPlanMode).toBe(false);
+    expect((pm as any).planFile.getContent()).toBe(planContent);
+  });
 
-      expect(pm.planFile.getCompletedSteps()).toBe(1);
-      expect(pm.planFile.getTotalSteps()).toBe(2);
-    });
+  it("falls back to loading plan file from disk when content is missing", () => {
+    const { pi } = createMockPI([{ name: "read" }]);
 
-    it("returns progress feedback with remaining steps", () => {
-      const planContent = `---
-title: "Test"
-summary: ""
-steps:
-  - index: 1
-    text: "Step 1"
-    completed: false
-  - index: 2
-    text: "Step 2"
-    completed: false
-  - index: 3
-    text: "Step 3"
-    completed: false
----
+    const projectDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const planPath = path.join(projectDir, "fallback-plan-2026-01-01T00-00-00.md");
+    const planContent = "# Fallback Plan\n\nFallback details.";
+    fs.writeFileSync(planPath, planContent);
 
-## Plan Details
-`;
-      const { pm } = createPIWithPlan("executing", planContent);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    (ctx as any).sessionManager = {
+      getBranch: () => [{
+        type: "custom",
+        customType: "planit",
+        data: { phase: "planning", planFilePath: planPath, restoredTools: ["read"] },
+      }],
+    };
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() };
 
-      pm.planFile.markCompleted([1, 2]);
+    (pm as any).restoreState(ctx);
 
-      const total = pm.planFile.getTotalSteps();
-      const completed = pm.planFile.getCompletedSteps();
-      const remaining = pm.planFile.getRemainingSteps();
+    expect(pm.isPlanMode).toBe(true);
+    expect((pm as any).planFile.hasContent()).toBe(true);
+  });
+});
 
-      expect(completed).toBe(2);
-      expect(total).toBe(3);
-      expect(remaining).toContain("Step 3");
-      expect(remaining).not.toContain("Step 1");
-      expect(remaining).not.toContain("Step 2");
-    });
+// ── Phase 5 Tests: session_tree ───────────────────────────────────────
 
-    it("returns 'all steps complete' when last step is marked", () => {
-      const planContent = `---
-title: "Test"
-summary: ""
-steps:
-  - index: 1
-    text: "Only step"
-    completed: false
----
+describe("PlanMode — session_tree", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
 
-## Plan Details
-`;
-      const { pm } = createPIWithPlan("executing", planContent);
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-tree-test-" + Date.now();
+    process.env.HOME = tmpHome;
+  });
 
-      pm.planFile.markCompleted([1]);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
 
-      const remaining = pm.planFile.getRemainingSteps();
-      expect(remaining).toBe("");
-    });
+  it("reconstructs state on tree navigation", () => {
+    const { pi } = createMockPI([{ name: "read" }, { name: "edit" }]);
 
-    it("handles marking multiple steps at once", () => {
-      const planContent = `---
-title: "Test"
-summary: ""
-steps:
-  - index: 1
-    text: "Step 1"
-    completed: false
-  - index: 2
-    text: "Step 2"
-    completed: false
-  - index: 3
-    text: "Step 3"
-    completed: false
----
+    const projectDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const planPath = path.join(projectDir, "tree-plan-2026-01-01T00-00-00.md");
+    const planContent = "# Tree Plan\n\nTree plan content.";
+    fs.writeFileSync(planPath, planContent);
 
-## Plan Details
-`;
-      const { pm } = createPIWithPlan("executing", planContent);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    (ctx as any).sessionManager = {
+      getBranch: () => [{
+        type: "custom",
+        customType: "planit",
+        data: { phase: "planning", planFilePath: planPath, planContent, restoredTools: ["read"] },
+      }],
+    };
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() };
 
-      pm.planFile.markCompleted([1, 3]);
+    (pm as any).restoreState(ctx);
 
-      expect(pm.planFile.getCompletedSteps()).toBe(2);
-      expect(pm.planFile.getTotalSteps()).toBe(3);
-      expect(pm.planFile.getRemainingSteps()).toContain("Step 2");
-    });
+    expect(pm.isPlanMode).toBe(true);
+  });
+});
+
+// ── Phase 6 Tests: PlanFile.listPlans ────────────────────────────────
+
+describe("PlanFile.listPlans", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-list-test-" + Date.now();
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("returns empty array when no plans exist", () => {
+    const plans = PlanFile.listPlans("/tmp/nonexistent-project");
+    expect(plans).toEqual([]);
+  });
+
+  it("lists available plans sorted by modification time", () => {
+    const projectDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test");
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const older = path.join(projectDir, "old-plan-2026-01-01T00-00-00.md");
+    const newer = path.join(projectDir, "new-plan-2026-06-01T00-00-00.md");
+
+    fs.writeFileSync(older, "# Old");
+    fs.writeFileSync(newer, "# New");
+
+    const oldTime = new Date("2026-01-01");
+    fs.utimesSync(older, oldTime, oldTime);
+
+    const plans = PlanFile.listPlans("/tmp/test");
+    expect(plans.length).toBe(2);
+    expect(plans[0].filename).toBe("new-plan-2026-06-01T00-00-00.md");
+    expect(plans[1].filename).toBe("old-plan-2026-01-01T00-00-00.md");
   });
 });

@@ -1,8 +1,5 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
-/** Review action returned from the plan review menu. */
-export type ReviewAction = "buildAuto" | "buildMyself" | "continueEditing";
-
 /**
  * Lightweight UI helper that delegates to ExtensionUIContext.
  * All methods are no-ops when hasUI is false (print/RPC mode).
@@ -20,65 +17,57 @@ export class PlanUI {
 
   setWidget(lines: string[] | undefined, hasUI: boolean, ui: ExtensionUIContext): void {
     if (!hasUI) return;
-    ui.setWidget("planit-todos", lines);
+    ui.setWidget("planit-plan", lines);
   }
 
-  /** Show plan checklist + file path in widget (used during planning). */
+  /** Show plan file path and title in widget (used during planning). */
   showPlanningWidget(
-    planFilePath: string,
+    planFilePath: string | undefined,
     title: string | null,
-    lines: string[],
     hasUI: boolean,
     ui: ExtensionUIContext,
   ): void {
-    const rendered = [
+    if (!planFilePath) {
+      this.setWidget(["📋 Planning — no file written yet (use /planit write to save)"], hasUI, ui);
+      return;
+    }
+    this.setWidget([
       `📋 Plan: ${title ?? "untitled"}`,
-      `   [path: ${planFilePath}]`,
-      "",
-      ...lines,
-    ];
-    this.setWidget(rendered, hasUI, ui);
+      `   ${planFilePath}`,
+    ], hasUI, ui);
   }
 
-  /** Show plan in a scrollable editor, then prompt for review action. */
-  async showReviewMenu(
-    planContent: string,
-    planFilePath: string,
+  /** Show plan file path in widget during building phase. */
+  showBuildingWidget(
+    planFilePath: string | undefined,
     title: string | null,
     hasUI: boolean,
     ui: ExtensionUIContext,
-  ): Promise<ReviewAction | null> {
-    if (!hasUI) {
-      this.notify("Plan mode requires interactive TUI. Auto-approving.", "info", hasUI, ui);
-      return "buildAuto";
+  ): void {
+    if (!planFilePath) {
+      this.setWidget(["🔨 Building — plan in chat"], hasUI, ui);
+      return;
     }
+    this.setWidget([
+      `🔨 Building: ${title ?? "untitled"}`,
+      `   ${planFilePath}`,
+    ], hasUI, ui);
+  }
 
-    const header = `📋 Plan: ${title ?? "untitled"}\n   [path: ${planFilePath}]\n\n`;
+  /**
+   * Ask the user how they want to execute the plan.
+   * Returns "auto" if the agent should execute autonomously,
+   * "manual" if the user will drive, or null if cancelled.
+   */
+  async showBuildPrompt(hasUI: boolean, ui: ExtensionUIContext): Promise<"auto" | "manual" | null> {
+    if (!hasUI) return "auto";
 
-    // Show the plan in a proper scrollable editor
-    // Enter = approve, Esc = cancel (continue editing)
-    const result = await ui.editor("Plan Review", header + planContent);
-    if (result === undefined) {
-      // User pressed Escape — return to planning
-      return "continueEditing";
-    }
+    const choice = await ui.select(
+      "How do you want to build?",
+      ["Agent executes automatically", "I'll drive (plan injected as context)"],
+    );
 
-    // User pressed Enter — ask which build mode
-    const options = [
-      "⚡ Build (auto)",
-      "🔧 Build (myself)",
-      "↻ Continue editing",
-    ];
-
-    const choice = await ui.select("Build mode", options);
     if (!choice) return null;
-
-    const actionMap: Record<string, ReviewAction> = {
-      [options[0]]: "buildAuto",
-      [options[1]]: "buildMyself",
-      [options[2]]: "continueEditing",
-    };
-
-    return actionMap[choice];
+    return choice.startsWith("Agent") ? "auto" : "manual";
   }
 }

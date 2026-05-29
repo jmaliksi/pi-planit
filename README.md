@@ -1,6 +1,6 @@
 # pi-planit
 
-Headless plan mode for pi.dev — plan, review, and execute changes with safety and control.
+Chat-first plan mode for pi.dev — explore safely, save a plan when ready, then build with full tool access.
 
 ## Quick Start
 
@@ -9,13 +9,16 @@ Headless plan mode for pi.dev — plan, review, and execute changes with safety 
 --planit
 
 # Or enter plan mode mid-session
-/planit migrate auth to JWT
+/planit
 
-# The agent explores the codebase and writes a plan
+# The agent explores the codebase and discusses the approach in chat
 # (write tools blocked, bash filtered to read-only)
 
-# Review the plan and choose an execution mode
-/planit review
+# When ready, save the current conversation as a plan file
+/planit write
+
+# When ready to implement, restore full tools and inject the plan as context
+/planit build
 
 # Check status at any time
 /planit status
@@ -24,7 +27,7 @@ Headless plan mode for pi.dev — plan, review, and execute changes with safety 
 /planit resume
 
 # Exit plan mode
-/planit off
+/planit exit
 ```
 
 ## Features
@@ -37,80 +40,74 @@ Enter **plan mode** to explore the codebase safely before making any changes. Wh
 - **Bash filtering** — `bash` calls pass through a whitelist/denylist filter. Only explicitly safe commands are allowed.
 - **System prompt injection** — a read-only guard-rail prompt is appended to the agent's system prompt on every turn.
 
-The agent uses the `write_plan` tool (registered as a custom tool, available only in plan mode) to save the plan. No plan file is created until the agent calls `write_plan`.
+Planning is **chat-first**: the agent explores and discusses in conversation. No plan file is created unless you explicitly call `/planit write`.
 
 ### Phases
 
-The state machine has four phases:
+The state machine has three phases:
 
 | Phase | Tool access | Description |
 |---|---|---|
 | `idle` | Full | Normal operation, no plan active |
-| `planning` | Read-only (whitelisted tools + filtered bash) | Agent explores, asks questions, writes plan |
-| `planned` | Full | Plan reviewed and approved. User is in control. |
-| `executing` | Full | Agent runs approved plan steps with progress tracking |
+| `planning` | Read-only (whitelisted tools + filtered bash) | Agent explores and discusses in chat |
+| `building` | Full | Plan injected as context. Agent executes (auto) or user drives. |
 
 ### Enter Plan Mode
 
 | Method | Usage |
 |--------|-------|
-| Command | `/planit` — toggles (idle ↔ planning; planned/executing → planning) |
+| Command | `/planit` — toggles between idle and planning |
 | Flag | `--planit` — starts the session in plan mode |
 
 ### Plan File
 
-Plans are saved via the `write_plan` tool, which is available only during plan mode. Files are stored at `~/.pi/agent/plans/<sanitized-project-path>/<plan-name-timestamp>.md`.
+Plans are optional and written on demand via `/planit write`. Files are stored at `~/.pi/agent/plans/<sanitized-project-path>/<plan-name-timestamp>.md`.
 
-The agent is guided by a system prompt template that defines the expected structure:
+When you run `/planit write`, the extension asks the LLM to summarize the conversation into a plan document and saves the result. If a plan file already exists, the LLM semantically merges the new content with the existing file.
+
+Plan files are free-form markdown — no required structure. A typical plan looks like:
 
 ```markdown
-# Title
-## Summary
-One-paragraph overview.
+# Migrate Auth to JWT
 
-## Steps
-- [ ] Step 1: Objective — target files, validation method
-- [ ] Step 2: Objective — target files, validation method
-- [ ] Step 3: ...
+## Approach
+Replace session-based auth with stateless JWT tokens. Key changes:
+- Replace `express-session` with `jsonwebtoken`
+- Update `authMiddleware` to validate Bearer tokens
+- Migrate `/login` to issue tokens instead of sessions
 
-## Plan Details
-Implementation notes for each step. Target files, code changes, config updates,
-validation criteria. Include concrete file paths and function/method names.
+## Key Files
+- `src/middleware/auth.ts` — middleware rewrite
+- `src/routes/auth.ts` — login endpoint
+- `src/types/user.ts` — add token payload type
 
-## Assumptions and Reference
-- Assumption 1 — brief explanation
-- Reference: https://example.com/api-docs
-- Reference: src/auth/jwt.ts
+## Decisions
+- Use RS256 (asymmetric) over HS256 for multi-service compatibility
+- 15-minute access tokens, 7-day refresh tokens stored in httpOnly cookies
 ```
 
-Checklists use the `- [ ]` format and are auto-detected for the TUI widget.
+### Building (`/planit build`)
 
-### Live Widget
+When you run `/planit build`, the extension:
 
-A TUI widget displays plan progress:
+1. Prompts you to choose: **Agent executes automatically** or **I'll drive (plan injected as context)**
+2. Restores full tool access
+3. If a plan file was written, shows its path in the status widget
+4. Injects the plan content into the agent's system prompt as a reference
 
-- **Planning/planned** — shows plan title, file path, and checklist with `☐` (pending) / `☑` (completed) markers
-- **Executing** — shows `📋 n/total` progress, updates as the agent emits `[DONE:n]` markers
+In auto mode, the agent immediately starts working through the plan. In manual mode, you remain in control with the plan as background context.
 
-### Review Menu (`/planit review`)
-
-After the agent writes a plan, run `/planit review` to see the full plan and choose an execution mode:
-
-| Option | Phase transition | Behavior |
-|---|---|---|
-| **↺ Build (auto)** | `planned` → `executing` | Agent runs all plan steps automatically. Progress reported with `[DONE:n]`. |
-| **✓ Build (guided)** | Stays `planned` | Full tools restored. Plan is injected as a system prompt reference. User stays in control. |
-| **↻ Continue editing** | `planned` → `planning` | Returns to read-only planning mode. Revise the plan and re-review. |
+Exit building mode at any time with `/planit exit` or `/planit cancel`.
 
 ### Session Restoration
 
-When a session restarts, plan mode state (phase, plan file, tool set) is reconstructed from session history. You can resume mid-plan or mid-execution.
+When a session restarts, plan mode state (phase, plan file, tool set) is reconstructed from session history. You can resume mid-plan or mid-build.
 
 ### Configuration
 
 Plan mode tools are configurable via `~/.pi/agent/extensions/pi-planit/config.json`:
 
-- **`allowedTools`** — tool names allowed in plan mode (intersected with available tools). Default: `read`, `bash`, `grep`, `find`, `ls`, `lsp`, `ast_search`, `web_search`, `fetch_content`, `get_search_content`, `code_search`, `write_plan`.
+- **`allowedTools`** — tool names allowed in plan mode (intersected with available tools). Default: `read`, `bash`, `grep`, `find`, `ls`, `lsp`, `ast_search`, `web_search`, `fetch_content`, `get_search_content`, `code_search`.
 - **`blockedTools`** — tools always blocked at the event handler level. Default: `edit`, `write`, `ast_rewrite`.
 
 Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
@@ -121,15 +118,15 @@ Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 
 | Command | Description |
 |---|---|
-| `/planit` | Toggle (idle ↔ planning; planned/executing → planning) |
+| `/planit` | Toggle (idle ↔ planning) |
 | `/planit on` / `/planit enable` / `/planit start` | Enter planning mode |
-| `/planit off` / `/planit disable` / `/planit stop` / `/planit exit` | Exit plan mode (return to idle) |
-| `/planit review` | Review plan and choose execution mode (auto, guided, or continue editing) |
-| `/planit resume` | Browse past plans via picker; loads selected plan into its saved phase |
-| `/planit cancel` | Cancel execution/planning → planning (or idle if already in planning) |
+| `/planit off` / `/planit disable` / `/planit stop` / `/planit exit` | Exit to idle (no delete prompt) |
+| `/planit write [title]` | Ask the LLM to summarize the chat and save/merge a plan file |
+| `/planit build` | Restore full tools, inject plan as context, optionally auto-execute |
+| `/planit cancel` | Exit to idle; prompts to delete the plan file if one exists |
+| `/planit resume` | Browse past plans via picker; loads selected plan into planning mode |
 | `/planit delete` | Delete a plan file via picker + confirmation |
-| `/planit discard` | Remove the currently active plan file (resets to fresh state) |
-| `/planit status` | Show current phase and progress |
+| `/planit status` | Show current phase and plan file path |
 
 ## Environment Variables
 
@@ -170,10 +167,10 @@ npm run test
 ```
 src/
 ├── index.ts          # Extension entry point
-├── plan-mode.ts      # Core state machine (idle/planning/planned/executing), tool gating, system prompt injection, review flow
-├── plan-file.ts      # Plan file I/O, checklist parsing, storage paths
+├── plan-mode.ts      # Core state machine (idle/planning/building), tool gating, system prompt injection
+├── plan-file.ts      # Plan file I/O, free-form markdown storage, listPlans()
 ├── bash-filter.ts    # Whitelist/denylist bash command filter
-├── ui.ts             # TUI menus, status bar, widget rendering
+├── ui.ts             # Status bar, plan widget, build prompt dialog
 ├── path-utils.ts     # Path resolution helpers
-└── types.ts          # Shared types: PlanPhase, PlanModeConfig, ChecklistItem
+└── types.ts          # Shared types: PlanPhase, PlanModeConfig
 ```
