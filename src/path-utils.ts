@@ -24,3 +24,18 @@ export function getAgentDir(): string {
 export function agentPath(...segments: string[]): string {
   return path.join(getAgentDir(), ...segments);
 }
+
+/**
+ * Resolve the plan storage directory based on the configured storage mode.
+ * @param cwd - Current working directory (used for local mode)
+ * @param planStorage - "global" for ~/.pi/agent/plans/, "local" for <cwd>/.pi/plans/
+ */
+export function resolvePlansDir(
+  cwd: string,
+  planStorage: "global" | "local",
+): string {
+  if (planStorage === "local") {
+    return path.join(cwd, ".pi", "plans");
+  }
+  return agentPath("plans");
+}

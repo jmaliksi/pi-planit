@@ -3,6 +3,19 @@ import * as path from "node:path";
 import { agentPath } from "./path-utils";
 
 /**
+ * Resolved plan storage directory. Set once via setResolvedPlansDir.
+ * Defaults to global storage (~/.pi/agent/plans/).
+ */
+let resolvedPlansDir: string = agentPath("plans");
+
+/**
+ * Set the resolved plan storage directory. Called by PlanMode on startup.
+ */
+export function setResolvedPlansDir(dir: string): void {
+  resolvedPlansDir = dir;
+}
+
+/**
  * Derive a 3-5 word filename from a user's task description.
  * Example: "migrate auth to JWT" → "migrate-auth-to-jwt" + timestamp
  */
@@ -28,11 +41,10 @@ export class PlanFile {
   content: string = "";
 
   /**
-   * Initialize plan file in agent plans directory.
-   * Honors PI_CODING_AGENT_DIR env var; falls back to ~/.pi/agent/plans/.
+   * Initialize plan file in the resolved plans directory.
    */
   init(cwd: string, userSummary: string = "untitled"): void {
-    const plansDir = agentPath("plans");
+    const plansDir = resolvedPlansDir;
     const sanitizedProjectPath = cwd.replace(/\//g, "--");
     const projectPlansDir = path.join(plansDir, sanitizedProjectPath);
     const planName = `${derivePlanName(userSummary)}.md`;
@@ -80,10 +92,12 @@ export class PlanFile {
 
   /**
    * List all plan files for a given project directory.
+   * Uses the resolved plans directory set via setResolvedPlansDir().
+   * @param cwd - Current working directory (used only for path sanitization, not for directory resolution)
    * Returns sorted array of { filename, filePath, modified } objects.
    */
   static listPlans(cwd: string): { filename: string; filePath: string; modified: Date }[] {
-    const plansDir = agentPath("plans");
+    const plansDir = resolvedPlansDir;
     const sanitizedProjectPath = cwd.replace(/\//g, "--");
     const projectPlansDir = path.join(plansDir, sanitizedProjectPath);
 

@@ -10,10 +10,10 @@ import type {
   PlanPhase,
   PlanModeConfig,
 } from "./types";
-import { PlanFile } from "./plan-file";
+import { PlanFile, setResolvedPlansDir } from "./plan-file";
 import { BashFilter } from "./bash-filter";
 import { PlanUI } from "./ui";
-import { agentPath } from "./path-utils";
+import { agentPath, resolvePlansDir } from "./path-utils";
 import * as path from "node:path";
 
 // ── Plan Mode System Prompt ──────────────────────────────────────────
@@ -99,6 +99,7 @@ export class PlanMode {
         "code_search",
       ],
       blockedTools: ["edit", "write", "ast_rewrite"],
+      planStorage: "global",
     };
 
     try {
@@ -121,6 +122,7 @@ export class PlanMode {
       return {
         allowedTools: parsed.allowedTools ?? defaultConfig.allowedTools,
         blockedTools: parsed.blockedTools ?? defaultConfig.blockedTools,
+        planStorage: parsed.planStorage ?? defaultConfig.planStorage,
       };
     } catch (err) {
       console.error(`Planit: Failed to load config, using defaults: ${err}`);
@@ -159,6 +161,7 @@ export class PlanMode {
     }
 
     this.cwd = ctx.cwd;
+    setResolvedPlansDir(resolvePlansDir(this.cwd, this.config.planStorage ?? "global"));
     this.captureCurrentTools();
 
     const readOnlyTools = this.getReadOnlyTools();
@@ -199,6 +202,19 @@ export class PlanMode {
     this.ui.setStatus(undefined, ctx.hasUI, ctx.ui);
     this.ui.notify("Plan mode exited. Tools restored.", "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
+  }
+
+  /** Exit to idle with a warning about plan file safety when coming from building. */
+  private async exitToIdleWithBuildWarning(ctx: ExtensionContext): Promise<void> {
+    if (this.phase === "building") {
+      this.ui.notify(
+        "Plan mode exited from building. Use /planit discard to delete the plan file.",
+        "warning",
+        ctx.hasUI,
+        ctx.ui,
+      );
+    }
+    this.exitToIdle(ctx);
   }
 
   // ── Tool Call Gating ───────────────────────────────────────────────
@@ -347,6 +363,8 @@ export class PlanMode {
           this.pi.setActiveTools(readOnlyTools);
         }
         this.phase = "planning";
+        this.cwd = ctx.cwd;
+        setResolvedPlansDir(resolvePlansDir(this.cwd, this.config.planStorage ?? "global"));
         this.ui.setStatus("⏸ planning (restored)", ctx.hasUI, ctx.ui);
         this.ui.showPlanningWidget(
           this.planFile.getFilePath() || undefined,
@@ -360,6 +378,8 @@ export class PlanMode {
           this.pi.setActiveTools(this.restoredTools);
         }
         this.phase = "building";
+        this.cwd = ctx.cwd;
+        setResolvedPlansDir(resolvePlansDir(this.cwd, this.config.planStorage ?? "global"));
         this.ui.setStatus("🔨 building (restored)", ctx.hasUI, ctx.ui);
         this.ui.showBuildingWidget(
           this.planFile.getFilePath() || undefined,
@@ -404,6 +424,22 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
   }
 
   /**
+   * Exit to idle from any phase.
+   */
+  private async exitPlanMode(ctx: ExtensionContext): Promise<void> {
+    if (this.phase === "idle") {
+      this.ui.notify("Already idle.", "info", ctx.hasUI, ctx.ui);
+      return;
+    }
+
+    if (this.phase === "building") {
+      await this.exitToIdleWithBuildWarning(ctx);
+    } else {
+      this.exitToIdle(ctx);
+    }
+  }
+
+  /**
    * Transition to building phase: restore full tools, inject plan as context.
    */
   private async startBuild(ctx: ExtensionContext): Promise<void> {
@@ -445,11 +481,11 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
   }
 
   /**
-   * Cancel: abandon planning or building. If a plan file exists, ask to delete it, then → idle.
+   * Discard: exit to idle and offer to delete the plan file. Works from any phase.
    */
-  private async cancelPlan(ctx: ExtensionContext): Promise<void> {
+  private async discardPlan(ctx: ExtensionContext): Promise<void> {
     if (this.phase === "idle") {
-      this.ui.notify("Nothing to cancel.", "info", ctx.hasUI, ctx.ui);
+      this.ui.notify("Nothing to discard.", "info", ctx.hasUI, ctx.ui);
       return;
     }
 
@@ -472,9 +508,21 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
   }
 
   /**
+   * Finish: same as discard but only works from building phase.
+   */
+  private async finishPlan(ctx: ExtensionContext): Promise<void> {
+    if (this.phase !== "building") {
+      this.ui.notify("Finish only works from building phase. Use /planit discard instead.", "warning", ctx.hasUI, ctx.ui);
+      return;
+    }
+    await this.discardPlan(ctx);
+  }
+
+  /**
    * Show a plan picker and resume planning from a saved file.
    */
   private async resumePlan(ctx: ExtensionContext): Promise<void> {
+    setResolvedPlansDir(resolvePlansDir(ctx.cwd, this.config.planStorage ?? "global"));
     const plans = PlanFile.listPlans(ctx.cwd);
 
     if (plans.length === 0) {
@@ -528,6 +576,7 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
    * Show a plan picker and delete a saved file.
    */
   private async deletePlan(ctx: ExtensionContext): Promise<void> {
+    setResolvedPlansDir(resolvePlansDir(ctx.cwd, this.config.planStorage ?? "global"));
     const plans = PlanFile.listPlans(ctx.cwd);
 
     if (plans.length === 0) {
@@ -576,8 +625,7 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
 
   register(pi: ExtensionAPI): void {
     pi.registerCommand("planit", {
-      description:
-        "Manage plan mode. Usage: /planit [on|off|write|build|cancel|exit|resume|delete|status]",
+      description: "Manage plan mode. Usage: /planit [exit|discard|finish|write|build|resume|delete]",
       handler: async (args: string, ctx: ExtensionContext) => {
         const raw = args.trim().toLowerCase();
         const [subcommand, ...rest] = raw.split(/\s+/);
@@ -588,18 +636,23 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
           if (this.phase === "idle") {
             this.enterPlanning(ctx);
           } else {
-            this.exitToIdle(ctx);
+            await this.exitPlanMode(ctx);
           }
           return;
         }
 
-        if (["on", "enable", "start"].includes(subcommand)) {
-          this.enterPlanning(ctx);
+        if (subcommand === "exit") {
+          await this.exitPlanMode(ctx);
           return;
         }
 
-        if (["off", "disable", "stop", "exit"].includes(subcommand)) {
-          this.exitToIdle(ctx);
+        if (subcommand === "discard") {
+          await this.discardPlan(ctx);
+          return;
+        }
+
+        if (subcommand === "finish") {
+          await this.finishPlan(ctx);
           return;
         }
 
@@ -615,11 +668,6 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
           return;
         }
 
-        if (subcommand === "cancel") {
-          await this.cancelPlan(ctx);
-          return;
-        }
-
         if (subcommand === "resume") {
           await this.resumePlan(ctx);
           return;
@@ -630,34 +678,7 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
           return;
         }
 
-        if (["status", "state"].includes(subcommand)) {
-          if (this.phase === "planning") {
-            this.ui.notify("Plan mode: planning (read-only)", "info", ctx.hasUI, ctx.ui);
-            this.ui.showPlanningWidget(
-              this.planFile.getFilePath() || undefined,
-              this.planFile.getTitle(),
-              ctx.hasUI,
-              ctx.ui,
-            );
-          } else if (this.phase === "building") {
-            this.ui.notify("Plan mode: building (full tools)", "info", ctx.hasUI, ctx.ui);
-            this.ui.showBuildingWidget(
-              this.planFile.getFilePath() || undefined,
-              this.planFile.getTitle(),
-              ctx.hasUI,
-              ctx.ui,
-            );
-          } else {
-            this.ui.notify("Plan mode: idle", "info", ctx.hasUI, ctx.ui);
-          }
-          return;
-        }
-
-        // Unknown subcommand — if idle, enter planning and treat args as initial prompt
-        if (this.phase === "idle") {
-          this.enterPlanning(ctx);
-        }
-        pi.sendUserMessage(args, { deliverAs: "followUp" });
+        this.ui.notify("Command not recognized. Usage: /planit [exit|discard|finish|write|build|resume|delete]", "warning", ctx.hasUI, ctx.ui);
       },
     });
 

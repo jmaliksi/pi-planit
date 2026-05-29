@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { PlanMode } from "../src/plan-mode";
-import { PlanFile } from "../src/plan-file";
+import { PlanFile, setResolvedPlansDir } from "../src/plan-file";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -122,16 +122,16 @@ describe("PlanMode — tool restoration", () => {
   });
 });
 
-// ── Phase 2 Tests: cancelPlan ─────────────────────────────────────────
+// ── Phase 2 Tests: discardPlan ────────────────────────────────────────
 
-describe("PlanMode — cancelPlan", () => {
+describe("PlanMode — discardPlan", () => {
   let backupHome: string | undefined;
   let tmpHome: string;
 
   beforeEach(() => {
     vi.restoreAllMocks();
     backupHome = process.env.HOME;
-    tmpHome = "/tmp/planit-cancel-test-" + Date.now();
+    tmpHome = "/tmp/planit-discard-test-" + Date.now();
     process.env.HOME = tmpHome;
   });
 
@@ -145,7 +145,7 @@ describe("PlanMode — cancelPlan", () => {
     try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it("notifies nothing to cancel from idle", async () => {
+  it("notifies nothing to discard from idle", async () => {
     const { pi } = createMockPI();
     const pm = new PlanMode(pi);
     const ctx = pi.getContext()!;
@@ -153,11 +153,11 @@ describe("PlanMode — cancelPlan", () => {
     (ctx as any).hasUI = true;
     (ctx as any).ui = { notify, setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn(), confirm: vi.fn() };
 
-    await (pm as any).cancelPlan(ctx);
+    await (pm as any).discardPlan(ctx);
 
     expect(pm.isPlanMode).toBe(false);
     expect(pm.isBuilding).toBe(false);
-    expect(notify).toHaveBeenCalledWith("Nothing to cancel.", "info");
+    expect(notify).toHaveBeenCalledWith("Nothing to discard.", "info");
   });
 
   it("exits to idle from planning without plan file", async () => {
@@ -169,12 +169,12 @@ describe("PlanMode — cancelPlan", () => {
     (pm as any).enterPlanning(ctx);
     expect(pm.isPlanMode).toBe(true);
 
-    await (pm as any).cancelPlan(ctx);
+    await (pm as any).discardPlan(ctx);
 
     expect(pm.isPlanMode).toBe(false);
   });
 
-  it("asks to delete plan file if one exists during cancel", async () => {
+  it("asks to delete plan file if one exists during discard", async () => {
     const { pi } = createMockPI([{ name: "read" }]);
     const pm = new PlanMode(pi);
     const ctx = pi.getContext()!;
@@ -191,7 +191,7 @@ describe("PlanMode — cancelPlan", () => {
     (pm as any).phase = "planning";
     (pm as any).restoredTools = ["read"];
 
-    await (pm as any).cancelPlan(ctx);
+    await (pm as any).discardPlan(ctx);
 
     expect(confirm).toHaveBeenCalled();
     expect(fs.existsSync(planPath)).toBe(false);
@@ -214,9 +214,140 @@ describe("PlanMode — cancelPlan", () => {
     (pm as any).phase = "planning";
     (pm as any).restoredTools = ["read"];
 
-    await (pm as any).cancelPlan(ctx);
+    await (pm as any).discardPlan(ctx);
 
     expect(fs.existsSync(planPath)).toBe(true);
+    expect(pm.isPlanMode).toBe(false);
+  });
+});
+
+describe("PlanMode — finishPlan", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-finish-test-" + Date.now();
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("refuses to finish from planning phase", async () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const notify = vi.fn();
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify, setStatus: vi.fn(), setWidget: vi.fn() };
+
+    (pm as any).phase = "planning";
+
+    await (pm as any).finishPlan(ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      "Finish only works from building phase. Use /planit discard instead.",
+      "warning",
+    );
+    expect(pm.isPlanMode).toBe(true);
+  });
+
+  it("finishes and offers to delete from building phase", async () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const confirm = vi.fn().mockResolvedValue(true);
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn(), confirm };
+
+    const planDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+    fs.mkdirSync(planDir, { recursive: true });
+    const planPath = path.join(planDir, "build-plan-2026-01-01T00-00-00.md");
+    fs.writeFileSync(planPath, "# Build Plan\n");
+    (pm as any).planFile.load(planPath);
+    (pm as any).phase = "building";
+    (pm as any).restoredTools = ["read"];
+
+    await (pm as any).finishPlan(ctx);
+
+    expect(confirm).toHaveBeenCalled();
+    expect(fs.existsSync(planPath)).toBe(false);
+    expect(pm.isPlanMode).toBe(false);
+    expect(pm.isBuilding).toBe(false);
+  });
+});
+
+describe("PlanMode — exitPlanMode", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-exit-test-" + Date.now();
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("warns about plan file when exiting from building", async () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const notify = vi.fn();
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify, setStatus: vi.fn(), setWidget: vi.fn() };
+
+    (pm as any).phase = "building";
+    (pm as any).restoredTools = ["read"];
+
+    await (pm as any).exitPlanMode(ctx);
+
+    expect(notify).toHaveBeenNthCalledWith(
+      1,
+      "Plan mode exited from building. Use /planit discard to delete the plan file.",
+      "warning",
+    );
+    expect(notify).toHaveBeenNthCalledWith(
+      2,
+      "Plan mode exited. Tools restored.",
+      "info",
+    );
+    expect(pm.isPlanMode).toBe(false);
+    expect(pm.isBuilding).toBe(false);
+  });
+
+  it("exits silently from planning (no build warning)", async () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const notify = vi.fn();
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify, setStatus: vi.fn(), setWidget: vi.fn() };
+
+    (pm as any).phase = "planning";
+    (pm as any).restoredTools = ["read"];
+
+    await (pm as any).exitPlanMode(ctx);
+
+    expect(notify).toHaveBeenCalledWith("Plan mode exited. Tools restored.", "info");
     expect(pm.isPlanMode).toBe(false);
   });
 });
@@ -467,6 +598,7 @@ describe("PlanFile.listPlans", () => {
     backupHome = process.env.HOME;
     tmpHome = "/tmp/planit-list-test-" + Date.now();
     process.env.HOME = tmpHome;
+    setResolvedPlansDir(path.join(tmpHome, ".pi", "agent", "plans"));
   });
 
   afterEach(() => {

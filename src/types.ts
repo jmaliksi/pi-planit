@@ -5,4 +5,6 @@ export interface PlanModeConfig {
   allowedTools: string[];
   /** Tools that are always blocked regardless of allowedTools */
   blockedTools?: string[];
+  /** Where to store plan files: "global" (~/.pi/agent/plans/) or "local" (<cwd>/.pi/plans/) */
+  planStorage?: "global" | "local";
 }

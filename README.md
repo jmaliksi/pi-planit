@@ -61,7 +61,10 @@ The state machine has three phases:
 
 ### Plan File
 
-Plans are optional and written on demand via `/planit write`. Files are stored at `~/.pi/agent/plans/<sanitized-project-path>/<plan-name-timestamp>.md`.
+Plans are optional and written on demand via `/planit write`. Storage location is controlled by `planStorage` in `config.json` (see Configuration below):
+
+- **`global`** (default): `~/.pi/agent/plans/<sanitized-project-path>/<plan-name-timestamp>.md`
+- **`local`**: `<cwd>/.pi/plans/<plan-name-timestamp>.md` (no project subdirectory)
 
 When you run `/planit write`, the extension asks the LLM to summarize the conversation into a plan document and saves the result. If a plan file already exists, the LLM semantically merges the new content with the existing file.
 
@@ -105,10 +108,11 @@ When a session restarts, plan mode state (phase, plan file, tool set) is reconst
 
 ### Configuration
 
-Plan mode tools are configurable via `~/.pi/agent/extensions/pi-planit/config.json`:
+Plan mode configuration is stored in `~/.pi/agent/extensions/pi-planit/config.json`:
 
 - **`allowedTools`** — tool names allowed in plan mode (intersected with available tools). Default: `read`, `bash`, `grep`, `find`, `ls`, `lsp`, `ast_search`, `web_search`, `fetch_content`, `get_search_content`, `code_search`.
 - **`blockedTools`** — tools always blocked at the event handler level. Default: `edit`, `write`, `ast_rewrite`.
+- **`planStorage`** — where plan files are stored: `"global"` (default, `~/.pi/agent/plans/`) or `"local"` (`<cwd>/.pi/plans/`).
 
 Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 
