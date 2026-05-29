@@ -4,6 +4,18 @@ Chat-first plan mode for pi.dev — explore safely, save a plan when ready, then
 
 ## Quick Start
 
+### Installation
+```bash
+cd /path/to/project
+git clone git@github.com:jmaliksi/pi-planit.git
+cd pi-planit
+npm install
+npm run build
+pi install /path/to/project/pi-planit
+```
+
+### Usage
+
 ```bash
 # start a session in plan mode via flag
 pi --planit
@@ -156,9 +168,6 @@ npm install
 npm run build
 ```
 
-### Install as Extension
-
-Copy the `dist` output to your pi installation's extension directory, or add the package to `~/.pi/agent/extensions/pi-planit/`.
 
 ### Run Tests
 
