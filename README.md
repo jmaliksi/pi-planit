@@ -31,6 +31,9 @@ pi --planit
 # drop out of planning to resume (or not) later
 /planit exit
 
+# review the current plan
+/planit review
+
 # resume a past plan
 /planit resume
 
@@ -116,6 +119,14 @@ In auto mode, the agent immediately starts working through the plan. In manual m
 
 Exit building mode at any time with `/planit exit`, `/planit discard`, or `/planit finish`.
 
+### Review (`/planit review`)
+
+Opens the current plan file in your external editor (`$VISUAL`/`$EDITOR`). Pi's TUI suspends while the editor is active, then resumes when the editor exits. Any changes made in the editor are written back to the plan file.
+
+- **No plan file** → notification: "No plan written yet. Use `/planit write` to create one first."
+- **No `$VISUAL`/`$EDITOR`** → notification: "External editor not set. Set `$VISUAL` or `$EDITOR` to edit."
+- **Works from any phase** (`idle`, `planning`, `building`)
+
 ### Session Restoration
 
 When a session restarts, plan mode state (phase, plan file, tool set) is reconstructed from session history. You can resume mid-plan or mid-build.
@@ -144,6 +155,7 @@ Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 | `/planit build` | Restore full tools, inject plan as context, optionally auto-execute |
 | `/planit resume` | Browse past plans via picker; loads selected plan into planning mode |
 | `/planit delete` | Delete a plan file via picker + confirmation |
+| `/planit review` | Open the current plan in your external editor ($VISUAL/$EDITOR); Pi suspends, changes written back on exit
 
 ## Environment Variables
 

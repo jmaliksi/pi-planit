@@ -18,7 +18,7 @@ Extension for pi.dev providing chat-first plan mode — safe codebase exploratio
 | File | Responsibility |
 |---|---|
 | `src/index.ts` | Extension entry point — registers PlanMode instance |
-| `src/plan-mode.ts` | Core state machine: enter/exit, tool gating, system prompt injection, session lifecycle |
+| `src/plan-mode.ts` | Core state machine: enter/exit, tool gating, system prompt injection, session lifecycle, `/planit review` |
 | `src/plan-file.ts` | Plan file I/O, storage paths, `listPlans()` |
 | `src/bash-filter.ts` | Whitelist/denylist for bash commands in plan mode |
 | `src/ui.ts` | Status bar, plan widget, build prompt dialog |
@@ -26,7 +26,7 @@ Extension for pi.dev providing chat-first plan mode — safe codebase exploratio
 | `src/path-utils.ts` | Path resolution helpers |
 
 ## Commands (user-facing)
-`/planit` toggle · `/planit on` · `/planit off` · `/planit write [title]` · `/planit build` · `/planit cancel` · `/planit exit` · `/planit resume` · `/planit delete` · `/planit status`
+`/planit` toggle · `/planit write [title]` · `/planit build` · `/planit exit` · `/planit resume` · `/planit delete` · `/planit discard` · `/planit review`
 
 ## Build & Test
 ```bash
@@ -35,7 +35,7 @@ npm run test     # vitest run
 npm run dev      # tsc --watch
 ```
 
-> Note: If already in the repo root, the agent doesn't need to `cd` first — just run the commands directly.
+> IMPORTANT: If already in the repo root, the agent doesn't need to `cd` first — just run the commands directly.
 
 ## State Machine
 ```

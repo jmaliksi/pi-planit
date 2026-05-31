@@ -1,4 +1,7 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawn } from "node:child_process";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -14,7 +17,7 @@ import { PlanFile, setResolvedPlansDir } from "./plan-file";
 import { BashFilter } from "./bash-filter";
 import { PlanUI } from "./ui";
 import { agentPath, resolvePlansDir } from "./path-utils";
-import * as path from "node:path";
+import { Container, Text } from "@earendil-works/pi-tui";
 
 // ── Plan Mode System Prompt ──────────────────────────────────────────
 
@@ -530,12 +533,7 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
       return;
     }
 
-    const options = plans.map((p) => {
-      const readable = p.filename.replace(/\.md$/, "");
-      const parts = readable.split(/-\d{4}-\d{2}-\d{2}T/);
-      const displayName = parts.length > 1 ? parts[0] : readable;
-      return `${displayName} (${new Date(p.modified).toLocaleString()})`;
-    });
+    const options = plans.map((p) => `${p.title}  (${p.filename.replace(/\.md$/, "")})`);
 
     let selectedPlan = plans[0];
 
@@ -591,12 +589,7 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
       return;
     }
 
-    const options = plans.map((p) => {
-      const readable = p.filename.replace(/\.md$/, "");
-      const parts = readable.split(/-\d{4}-\d{2}-\d{2}T/);
-      const displayName = parts.length > 1 ? parts[0] : readable;
-      return `${displayName} (${new Date(p.modified).toLocaleString()})`;
-    });
+    const options = plans.map((p) => `${p.title}  (${p.filename.replace(/\.md$/, "")})`);
 
     const selected = await ctx.ui.select("Select plan to delete", options);
     if (!selected) {
@@ -619,6 +612,103 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
 
     fs.unlinkSync(selectedPlan.filePath);
     this.ui.notify(`Plan deleted: ${selectedPlan.filename}`, "info", ctx.hasUI, ctx.ui);
+  }
+
+  // ── Plan Review ────────────────────────────────────────────────────
+
+  /**
+   * Open the current plan file in the user's external editor ($VISUAL/$EDITOR).
+   * Pi's TUI suspends while the editor is active. Changes are written back on exit.
+   * Works from any phase (idle, planning, building).
+   */
+  private async reviewPlan(ctx: ExtensionContext): Promise<void> {
+    const filePath = this.planFile.getFilePath();
+    const content = this.planFile.getContent();
+
+    if (!filePath || !content.trim()) {
+      this.ui.notify(
+        "No plan written yet. Use `/planit write` to create one first.",
+        "info",
+        ctx.hasUI,
+        ctx.ui,
+      );
+      return;
+    }
+
+    const editorCmd = process.env.VISUAL || process.env.EDITOR;
+    if (!editorCmd) {
+      this.ui.notify(
+        "External editor not set. Set `$VISUAL` or `$EDITOR` to edit.",
+        "info",
+        ctx.hasUI,
+        ctx.ui,
+      );
+      return;
+    }
+
+    const tmpFile = path.join(os.tmpdir(), `pi-plan-review-${Date.now()}.md`);
+
+    // ctx.ui.custom() is the only way to get a TUI handle for stop/start.
+    // We use it purely as a vehicle — the editor opens immediately, no overlay.
+    await ctx.ui.custom<undefined>(async (tui, _theme, _kb, done) => {
+      try {
+        // Write plan content to temp file
+        fs.writeFileSync(tmpFile, content, "utf-8");
+
+        // Stop TUI to release terminal to the editor
+        tui.stop();
+
+        const [editor, ...editorArgs] = editorCmd.split(" ");
+        process.stdout.write(
+          `Launching external editor: ${editorCmd}\nPi will resume when the editor exits.\n`,
+        );
+
+        await new Promise<void>((resolve) => {
+          const child = spawn(editor, [...editorArgs, tmpFile], {
+            stdio: "inherit",
+            shell: process.platform === "win32",
+          });
+          child.on("error", () => resolve());
+          child.on("close", () => resolve());
+        });
+
+        // Read back — user may have saved or not
+        const newContent = fs.readFileSync(tmpFile, "utf-8").replace(/\n$/, "");
+
+        // Write back to the plan file if content changed
+        if (newContent !== content) {
+          fs.writeFileSync(filePath, newContent, "utf-8");
+          this.planFile.content = newContent;
+          this.ui.notify(
+            `Plan updated (${this.planFile.getFilePath()})`,
+            "info",
+            ctx.hasUI,
+            ctx.ui,
+          );
+        }
+      } finally {
+        // Clean up temp file
+        try {
+          fs.unlinkSync(tmpFile);
+        } catch {
+          // Ignore cleanup errors
+        }
+        // Restart TUI (force full re-render since editor uses alternate screen)
+        tui.start();
+        tui.requestRender(true);
+      }
+
+      done(undefined);
+      return {
+        render: () => {
+          const c = new Container();
+          c.addChild(new Text("", 0, 0));
+          return c.render(80);
+        },
+        invalidate: () => {},
+        handleInput: () => {},
+      };
+    });
   }
 
   // ── Registration ───────────────────────────────────────────────────
@@ -678,7 +768,12 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
           return;
         }
 
-        this.ui.notify("Command not recognized. Usage: /planit [exit|discard|finish|write|build|resume|delete]", "warning", ctx.hasUI, ctx.ui);
+        if (subcommand === "review") {
+          await this.reviewPlan(ctx);
+          return;
+        }
+
+        this.ui.notify("Command not recognized. Usage: /planit [exit|discard|finish|write|build|resume|delete|review]", "warning", ctx.hasUI, ctx.ui);
       },
     });
 

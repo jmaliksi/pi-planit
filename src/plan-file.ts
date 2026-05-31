@@ -91,12 +91,26 @@ export class PlanFile {
   }
 
   /**
+   * Extract a human-readable title from plan file content.
+   * Falls back to filename stem (sans timestamp) if no heading is found.
+   */
+  private static extractTitle(content: string, filename: string): string {
+    const headingMatch = content.match(/^#\s+(.+)$/m);
+    if (headingMatch) {
+      return headingMatch[1].trim();
+    }
+    const stem = path.basename(filename, ".md");
+    const parts = stem.split(/-\d{4}-\d{2}-\d{2}T/);
+    return parts[0] ?? stem;
+  }
+
+  /**
    * List all plan files for a given project directory.
    * Uses the resolved plans directory set via setResolvedPlansDir().
    * @param cwd - Current working directory (used only for path sanitization, not for directory resolution)
-   * Returns sorted array of { filename, filePath, modified } objects.
+   * Returns sorted array of { filename, filePath, modified, title } objects.
    */
-  static listPlans(cwd: string): { filename: string; filePath: string; modified: Date }[] {
+  static listPlans(cwd: string): { filename: string; filePath: string; modified: Date; title: string }[] {
     const plansDir = resolvedPlansDir;
     const sanitizedProjectPath = cwd.replace(/\//g, "--");
     const projectPlansDir = path.join(plansDir, sanitizedProjectPath);
@@ -110,7 +124,8 @@ export class PlanFile {
       .map((filename) => {
         const filePath = path.join(projectPlansDir, filename);
         const stat = fs.statSync(filePath);
-        return { filename, filePath, modified: stat.mtime };
+        const content = fs.readFileSync(filePath, "utf-8");
+        return { filename, filePath, modified: stat.mtime, title: this.extractTitle(content, filename) };
       });
 
     return files.sort((a, b) => b.modified.getTime() - a.modified.getTime());
