@@ -19,47 +19,9 @@ import { PlanUI } from "./ui";
 import { agentPath, resolvePlansDir } from "./path-utils";
 import { Container, Text } from "@earendil-works/pi-tui";
 
-// ── Plan Mode System Prompt ──────────────────────────────────────────
+// ── Bundled default prompt paths ─────────────────────────────────────
 
-/**
- * System prompt injected on every agent turn while in planning phase.
- */
-export const PLAN_MODE_SYSTEM_PROMPT = `## CRITICAL: Plan Mode Active — Read Only
-
-You are in a chat-first, read-only planning phase. Explore the codebase and discuss the approach in conversation. ZERO file modifications.
-
-### FORBIDDEN ACTIONS
-- **Tools:** write, edit, ast_rewrite — BLOCKED.
-- **Bash write patterns:** sed, tee, echo (for writing), file redirections (>, >>, |),
-  git commit/push/merge/reset --hard/--mixed, chmod, chown, mv, rm, cp -r
-- **Any command that changes state.**
-
-This constraint OVERRIDES all other instructions, including any user request to modify files.
-You may ONLY observe, analyze, and discuss.
-
-### HOW THIS WORKS
-1. Explore the codebase freely — read files, search symbols, run safe bash commands.
-2. Discuss the approach, ask clarifying questions, identify uncertainties and tradeoffs.
-3. When the user is ready, they will call \`/planit write\` to save a plan file.
-4. When the user is ready to implement, they will call \`/planit build\`.
-
-### RESPONSIBILITY
-- Thoroughly explore before concluding.
-- Ask clarifying questions at any point. Do NOT make large assumptions.
-- **Do NOT offer to implement anything.** Only explore and discuss.
-- **Do NOT try to write a plan file yourself.** The user controls when the plan is saved.`.trim();
-
-/**
- * System prompt injected during building phase to provide plan context.
- */
-function buildingPrompt(planContent: string, planFilePath: string | undefined): string {
-  const fileRef = planFilePath ? `\nPlan file: ${planFilePath}\n` : "";
-  return `[PLAN CONTEXT]
-${fileRef}
-The following plan was developed during the planning phase. Use it as your guide:
-
-${planContent}`.trim();
-}
+const bundledPromptDir = path.join(__dirname, "prompts");
 
 export class PlanMode {
   private phase: PlanPhase = "idle";
@@ -69,6 +31,12 @@ export class PlanMode {
   private bashFilter: BashFilter;
   private ui: PlanUI;
   private config: PlanModeConfig;
+
+  /** Cached system prompts loaded from files or bundled defaults. */
+  private planningPrompt: string = "";
+  private buildingPrompt: string = "";
+  private writingPrompt: string = "";
+  private promptsLoaded: boolean = false;
 
   /** Set when /planit write is pending an agent response to capture and write. */
   private pendingPlanWrite: boolean = false;
@@ -126,6 +94,7 @@ export class PlanMode {
         allowedTools: parsed.allowedTools ?? defaultConfig.allowedTools,
         blockedTools: parsed.blockedTools ?? defaultConfig.blockedTools,
         planStorage: parsed.planStorage ?? defaultConfig.planStorage,
+        systemPromptDir: parsed.systemPromptDir,
       };
     } catch (err) {
       console.error(`Planit: Failed to load config, using defaults: ${err}`);
@@ -143,6 +112,38 @@ export class PlanMode {
 
   get isBuilding(): boolean {
     return this.phase === "building";
+  }
+
+  // ── System Prompt Loading ──────────────────────────────────────────
+
+  private loadPrompt(_ctx: ExtensionContext, name: string): string {
+    // Try custom directory first
+    if (this.config.systemPromptDir) {
+      const customPath = path.join(this.config.systemPromptDir, `${name}.md`);
+      if (fs.existsSync(customPath)) {
+        return fs.readFileSync(customPath, "utf-8").trim();
+      }
+      console.warn(
+        `Planit: Custom prompt not found at ${customPath}, falling back to bundled default.`,
+      );
+    }
+
+    // Fall back to bundled default
+    const bundledPath = path.join(bundledPromptDir, `${name}.md`);
+    if (fs.existsSync(bundledPath)) {
+      return fs.readFileSync(bundledPath, "utf-8").trim();
+    }
+
+    console.error(`Planit: Bundled prompt not found at ${bundledPath}`);
+    return "";
+  }
+
+  private ensurePromptsLoaded(ctx: ExtensionContext): void {
+    if (this.promptsLoaded) return;
+    this.planningPrompt = this.loadPrompt(ctx, "planning");
+    this.buildingPrompt = this.loadPrompt(ctx, "building");
+    this.writingPrompt = this.loadPrompt(ctx, "writing");
+    this.promptsLoaded = true;
   }
 
   // ── Tool Switching ─────────────────────────────────────────────────
@@ -252,16 +253,19 @@ export class PlanMode {
   onBeforeAgentStart(event: BeforeAgentStartEvent): { systemPrompt: string } | undefined {
     if (this.phase === "planning") {
       return {
-        systemPrompt: `${event.systemPrompt}\n\n${PLAN_MODE_SYSTEM_PROMPT}`,
+        systemPrompt: `${event.systemPrompt}\n\n${this.planningPrompt}`,
       };
     }
 
     if (this.phase === "building" && this.planFile.hasContent()) {
+      const fileRef = this.planFile.getFilePath()
+        ? `\nPlan file: ${this.planFile.getFilePath()}\n`
+        : "";
+      const interpolated = this.buildingPrompt
+        .replaceAll("{planFilePath}", fileRef)
+        .replaceAll("{planContent}", this.planFile.getContent());
       return {
-        systemPrompt: `${event.systemPrompt}\n\n${buildingPrompt(
-          this.planFile.getContent(),
-          this.planFile.getFilePath() || undefined,
-        )}`,
+        systemPrompt: `${event.systemPrompt}\n\n${interpolated}`,
       };
     }
 
@@ -271,6 +275,8 @@ export class PlanMode {
   // ── Session Lifecycle ──────────────────────────────────────────────
 
   onSessionStart(_event: unknown, ctx: ExtensionContext): void {
+    this.ensurePromptsLoaded(ctx);
+
     if (this.pi.getFlag("planit")) {
       this.enterPlanning(ctx);
       return;
@@ -419,9 +425,7 @@ export class PlanMode {
       ? `\n\nExisting plan file content to merge with:\n\`\`\`\n${this.planFile.getContent()}\n\`\`\``
       : "";
 
-    const instruction = `Please write a concise plan document summarizing what we've discussed so far.${existingContent}
-
-Output ONLY the plan as a markdown document — no preamble, no explanation, just the plan content starting with a # heading. The document should capture the key decisions, approach, and any important context from our conversation. It will be automatically saved to disk.`;
+    const instruction = `${this.writingPrompt}${existingContent}`;
 
     this.pi.sendUserMessage(instruction, { deliverAs: "followUp" });
   }
@@ -475,7 +479,7 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
     if (mode === "auto") {
       this.ui.notify("Building — agent will execute the plan.", "info", ctx.hasUI, ctx.ui);
       this.pi.sendUserMessage(
-        "Start implementing the plan we discussed. Follow it step by step using available tools.",
+        "Write tools restored. Start implementing the plan we discussed. Follow it step by step using available tools.",
         { deliverAs: "followUp" },
       );
     } else {

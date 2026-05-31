@@ -131,6 +131,18 @@ Opens the current plan file in your external editor (`$VISUAL`/`$EDITOR`). Pi's 
 
 When a session restarts, plan mode state (phase, plan file, tool set) is reconstructed from session history. You can resume mid-plan or mid-build.
 
+### System Prompt Templates
+
+Plan mode uses three markdown prompt templates that are bundled by default under `src/prompts/`:
+
+| File | Purpose | Variables |
+|---|---|---|
+| `planning.md` | Read-only guard-rail injected in planning phase | None |
+| `building.md` | Plan context injected in building phase | `{planFilePath}`, `{planContent}` |
+| `writing.md` | Instruction sent to LLM when `/planit write` is called | None |
+
+To customize prompts, set `systemPromptDir` in `config.json` to a directory containing your custom `.md` files. Missing custom files fall back to bundled defaults with a `console.warn`.
+
 ### Configuration
 
 Plan mode configuration is stored in `~/.pi/agent/extensions/pi-planit/config.json`:
@@ -138,6 +150,7 @@ Plan mode configuration is stored in `~/.pi/agent/extensions/pi-planit/config.js
 - **`allowedTools`** — tool names allowed in plan mode (intersected with available tools). Default: `read`, `bash`, `grep`, `find`, `ls`, `lsp`, `ast_search`, `web_search`, `fetch_content`, `get_search_content`, `code_search`.
 - **`blockedTools`** — tools always blocked at the event handler level. Default: `edit`, `write`, `ast_rewrite`.
 - **`planStorage`** — where plan files are stored: `"global"` (default, `~/.pi/agent/plans/`) or `"local"` (`<cwd>/.pi/plans/`).
+- **`systemPromptDir`** — directory containing custom system prompt `.md` files (`planning.md`, `building.md`, `writing.md`). Falls back to bundled defaults if not set.
 
 Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 
@@ -198,5 +211,6 @@ src/
 ├── bash-filter.ts    # Whitelist/denylist bash command filter
 ├── ui.ts             # Status bar, plan widget, build prompt dialog
 ├── path-utils.ts     # Path resolution helpers
-└── types.ts          # Shared types: PlanPhase, PlanModeConfig
+├── types.ts          # Shared types: PlanPhase, PlanModeConfig
+└── prompts/          # System prompt templates (planning.md, building.md, writing.md)
 ```

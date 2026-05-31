@@ -7,4 +7,6 @@ export interface PlanModeConfig {
   blockedTools?: string[];
   /** Where to store plan files: "global" (~/.pi/agent/plans/) or "local" (<cwd>/.pi/plans/) */
   planStorage?: "global" | "local";
+  /** Directory containing custom system prompt .md files (planning.md, building.md, writing.md). Falls back to bundled defaults if not set. */
+  systemPromptDir?: string;
 }
