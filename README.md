@@ -1,10 +1,17 @@
 # pi-planit
 
-Chat-first plan mode for pi.dev — explore safely, save a plan when ready, then build with full tool access.
+Chat-first plan mode for [pi.dev](https://pi.dev) — explore safely, save a plan when ready, then build with full tool access.
 
-## Quick Start
+## Installation
 
-### Installation
+### Via npm (recommended)
+
+```bash
+pi install npm:pi-planit
+```
+
+### Via git
+
 ```bash
 cd /path/to/project
 git clone git@github.com:jmaliksi/pi-planit.git
@@ -23,7 +30,7 @@ pi --planit
 # or enter plan mode mid-session
 /planit
 
-# you can explore the codebase and discusses the approach in chat while the agent can only use read-only tools.
+# you can explore the codebase and discuss the approach in chat while the agent can only use read-only tools.
 
 # when ready, save the current conversation as a plan file
 /planit write
@@ -184,7 +191,7 @@ Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 
 - Node.js
 - TypeScript
-- A local build of `pi` from [earendil-works/pi](https://github.com/earendil-works/pi)
+- A local build of `pi` from [earendil-works/pi](https://github.com/earendil-works/pi) (for development)
 
 ### Build
 
