@@ -1,6 +1,6 @@
 # pi-planit
 
-Chat-first plan mode for [pi.dev](https://pi.dev) — explore safely, save a plan when ready, then build with full tool access.
+Minimal, chat-first plan mode for [pi.dev](https://pi.dev) — explore read-only, save free-form plans on demand, then build with full tool access.
 
 ## Installation
 
@@ -56,43 +56,17 @@ pi --planit
 
 ## Features
 
-### Plan Mode (`/planit`)
+### Chat-first exploration
 
-Enter **plan mode** to explore the codebase safely before making any changes. While in plan mode:
+Plan mode is chat-first: the agent explores the codebase and discusses the approach in conversation. No plan file is created unless you explicitly call `/planit write`. Read-only tool access and hard bash filtering keep the agent safe while you think.
 
-- **Tool gating** — write tools (`edit`, `write`, `ast_rewrite`) are blocked via the active tool set.
-- **Bash filtering** — `bash` calls pass through a whitelist/denylist filter. Only explicitly safe commands are allowed.
-- **System prompt injection** — a read-only guard-rail prompt is appended to the agent's system prompt on every turn.
+### Hard bash filtering
 
-Planning is **chat-first**: the agent explores and discusses in conversation. No plan file is created unless you explicitly call `/planit write`.
+Unlike extensions that rely on system prompt guidance to keep bash read-only, pi-planit enforces a whitelist/denylist filter at the tool invocation layer. Only explicitly safe commands pass through.
 
-### Phases
+### Free-form plan files
 
-The state machine has three phases:
-
-| Phase | Tool access | Description |
-|---|---|---|
-| `idle` | Full | Normal operation, no plan active |
-| `planning` | Read-only (whitelisted tools + filtered bash) | Agent explores and discusses in chat |
-| `building` | Full | Plan injected as context. Agent executes (auto) or user drives. |
-
-### Enter Plan Mode
-
-| Method | Usage |
-|--------|-------|
-| Command | `/planit` — toggles between idle and planning |
-| Flag | `--planit` — starts the session in plan mode |
-
-### Plan File
-
-Plans are optional and written on demand via `/planit write`. Storage location is controlled by `planStorage` in `config.json` (see Configuration below):
-
-- **`global`** (default): `~/.pi/agent/plans/<sanitized-project-path>/<plan-name-timestamp>.md`
-- **`local`**: `<cwd>/.pi/plans/<plan-name-timestamp>.md` (no project subdirectory)
-
-When you run `/planit write`, the extension asks the LLM to summarize the conversation into a plan document and saves the result. If a plan file already exists, the LLM semantically merges the new content with the existing file.
-
-Plan files are free-form markdown — no required structure. A typical plan looks like:
+Plans are optional and written on demand — no checklist format, no required structure. Write whatever makes sense for your workflow. A typical plan looks like:
 
 ```markdown
 # Migrate Auth to JWT
@@ -113,30 +87,51 @@ Replace session-based auth with stateless JWT tokens. Key changes:
 - 15-minute access tokens, 7-day refresh tokens stored in httpOnly cookies
 ```
 
-### Building (`/planit build`)
+### Auto-summarize and merge
 
-When you run `/planit build`, the extension:
+Run `/planit write` to ask the LLM to summarize the conversation into a plan document. If a plan file already exists, it semantically merges the new content rather than overwriting.
 
-1. Prompts you to choose: **Agent executes automatically** or **I'll drive (plan injected as context)**
-2. Restores full tool access
-3. If a plan file was written, shows its path in the status widget
-4. Injects the plan content into the agent's system prompt as a reference
+### Session restoration
 
-In auto mode, the agent immediately starts working through the plan. In manual mode, you remain in control with the plan as background context.
+When a session restarts, plan mode state (phase, plan file, tool set) is reconstructed from session history. You can resume mid-plan or mid-build.
+
+### Phases
+
+The state machine has three phases:
+
+| Phase | Tool access | Description |
+|---|---|---|
+| `idle` | Full | Normal operation, no plan active |
+| `planning` | Read-only (whitelisted tools + filtered bash) | Agent explores and discusses in chat |
+| `building` | Full | Plan injected as context. Agent executes (auto) or user drives. |
+
+### Plan file storage
+
+Plans are stored based on `planStorage` in `config.json` (see Configuration):
+
+- **`global`** (default): `~/.pi/agent/plans/<sanitized-project-path>/<plan-name-timestamp>.md`
+- **`local`**: `<cwd>/.pi/plans/<plan-name-timestamp>.md` (no project subdirectory)
+
+### Enter plan mode
+
+| Method | Usage |
+|--------|-------|
+| Command | `/planit` — toggles between idle and planning |
+| Flag | `--planit` — starts the session in plan mode |
+
+### Build modes
+
+`/planit build` prompts you to choose **Agent executes automatically** or **I'll drive**. Either way, full tool access is restored and the plan is injected into the system prompt as context.
 
 Exit building mode at any time with `/planit exit`, `/planit discard`, or `/planit finish`.
 
 ### Review (`/planit review`)
 
-Opens the current plan file in your external editor (`$VISUAL`/`$EDITOR`). Pi's TUI suspends while the editor is active, then resumes when the editor exits. Any changes made in the editor are written back to the plan file.
+Opens the current plan file in your external editor (`$VISUAL`/`$EDITOR`). Pi's TUI suspends while the editor is active, then resumes when the editor exits. Changes are written back on exit.
 
 - **No plan file** → notification: "No plan written yet. Use `/planit write` to create one first."
 - **No `$VISUAL`/`$EDITOR`** → notification: "External editor not set. Set `$VISUAL` or `$EDITOR` to edit."
 - **Works from any phase** (`idle`, `planning`, `building`)
-
-### Session Restoration
-
-When a session restarts, plan mode state (phase, plan file, tool set) is reconstructed from session history. You can resume mid-plan or mid-build.
 
 ### System Prompt Templates
 
