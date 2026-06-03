@@ -38,7 +38,7 @@ export class PlanMode {
   private writingPrompt: string = "";
   private promptsLoaded: boolean = false;
 
-  /** Set when /planit write is pending an agent response to capture and write. */
+  /** Set when /planit:write is pending an agent response to capture and write. */
   private pendingPlanWrite: boolean = false;
 
   constructor(
@@ -183,7 +183,7 @@ export class PlanMode {
       ctx.hasUI,
       ctx.ui,
     );
-    this.ui.notify("Plan mode enabled (read-only). Explore and discuss. Use /planit write to save a plan.", "info", ctx.hasUI, ctx.ui);
+    this.ui.notify("Plan mode enabled (read-only). Explore and discuss. Use /planit:write to save a plan.", "info", ctx.hasUI, ctx.ui);
     this.persistState(ctx);
   }
 
@@ -212,7 +212,7 @@ export class PlanMode {
   private async exitToIdleWithBuildWarning(ctx: ExtensionContext): Promise<void> {
     if (this.phase === "building") {
       this.ui.notify(
-        "Plan mode exited from building. Use /planit discard to delete the plan file.",
+        "Plan mode exited from building. Use /planit:discard to delete the plan file.",
         "warning",
         ctx.hasUI,
         ctx.ui,
@@ -519,7 +519,7 @@ export class PlanMode {
    */
   private async finishPlan(ctx: ExtensionContext): Promise<void> {
     if (this.phase !== "building") {
-      this.ui.notify("Finish only works from building phase. Use /planit discard instead.", "warning", ctx.hasUI, ctx.ui);
+      this.ui.notify("Finish only works from building phase. Use /planit:discard instead.", "warning", ctx.hasUI, ctx.ui);
       return;
     }
     await this.discardPlan(ctx);
@@ -631,7 +631,7 @@ export class PlanMode {
 
     if (!filePath || !content.trim()) {
       this.ui.notify(
-        "No plan written yet. Use `/planit write` to create one first.",
+        "No plan written yet. Use `/planit:write` to create one first.",
         "info",
         ctx.hasUI,
         ctx.ui,
@@ -718,66 +718,103 @@ export class PlanMode {
   // ── Registration ───────────────────────────────────────────────────
 
   register(pi: ExtensionAPI): void {
+    // ── Bare /planit: enter planning (optionally forward args as message) ──
     pi.registerCommand("planit", {
-      description: "Manage plan mode. Usage: /planit [exit|discard|finish|write|build|resume|delete]",
+      description: "Enter planning mode. With arguments, enter planning and forward the message.",
       handler: async (args: string, ctx: ExtensionContext) => {
-        const raw = args.trim().toLowerCase();
-        const [subcommand, ...rest] = raw.split(/\s+/);
-        const extra = rest.join(" ").trim();
+        const rawArgs = args.trim();
 
-        // Toggle: idle → planning, planning/building → exit
-        if (!subcommand) {
+        // No arguments: phase-dependent behavior
+        if (!rawArgs) {
           if (this.phase === "idle") {
             this.enterPlanning(ctx);
+          } else if (this.phase === "planning") {
+            this.ui.notify("Plan mode is already enabled.", "info", ctx.hasUI, ctx.ui);
           } else {
-            await this.exitPlanMode(ctx);
+            this.ui.notify(
+              "Already in building phase. Use /planit:exit, /planit:discard, or /planit:finish to leave.",
+              "warning",
+              ctx.hasUI,
+              ctx.ui,
+            );
           }
           return;
         }
 
-        if (subcommand === "exit") {
-          await this.exitPlanMode(ctx);
+        // Has arguments: enter planning + forward as follow-up (unless already in planning/building)
+        if (this.phase === "planning") {
+          this.ui.notify("Plan mode is already enabled.", "info", ctx.hasUI, ctx.ui);
           return;
         }
-
-        if (subcommand === "discard") {
-          await this.discardPlan(ctx);
+        if (this.phase === "building") {
+          this.ui.notify(
+            "Already in building phase. Use /planit:exit, /planit:discard, or /planit:finish to leave.",
+            "warning",
+            ctx.hasUI,
+            ctx.ui,
+          );
           return;
         }
+        // idle with args: enter planning, then forward
+        this.enterPlanning(ctx);
+        this.pi.sendUserMessage(rawArgs, { deliverAs: "followUp" });
+      },
+    });
 
-        if (subcommand === "finish") {
-          await this.finishPlan(ctx);
-          return;
-        }
+    // ── Colon-prefixed subcommands ──
+    pi.registerCommand("planit:build", {
+      description: "Restore full tools, inject plan as context, optionally auto-execute",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        await this.startBuild(ctx);
+      },
+    });
 
-        if (subcommand === "write") {
-          // Optional title after "write"
-          const title = extra || undefined;
-          this.writePlan(ctx, title);
-          return;
-        }
+    pi.registerCommand("planit:discard", {
+      description: "Exit to idle; prompts to delete the plan file if one exists",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        await this.discardPlan(ctx);
+      },
+    });
 
-        if (subcommand === "build") {
-          await this.startBuild(ctx);
-          return;
-        }
+    pi.registerCommand("planit:exit", {
+      description: "Exit plan mode and restore full tool access",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        await this.exitPlanMode(ctx);
+      },
+    });
 
-        if (subcommand === "resume") {
-          await this.resumePlan(ctx);
-          return;
-        }
+    pi.registerCommand("planit:finish", {
+      description: "Like discard but only works from building phase",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        await this.finishPlan(ctx);
+      },
+    });
 
-        if (subcommand === "delete") {
-          await this.deletePlan(ctx);
-          return;
-        }
+    pi.registerCommand("planit:resume", {
+      description: "Browse and resume a saved plan file",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        await this.resumePlan(ctx);
+      },
+    });
 
-        if (subcommand === "review") {
-          await this.reviewPlan(ctx);
-          return;
-        }
+    pi.registerCommand("planit:review", {
+      description: "Open the current plan in your external editor ($VISUAL/$EDITOR)",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        await this.reviewPlan(ctx);
+      },
+    });
 
-        this.ui.notify("Command not recognized. Usage: /planit [exit|discard|finish|write|build|resume|delete|review]", "warning", ctx.hasUI, ctx.ui);
+    pi.registerCommand("planit:write", {
+      description: "Ask the LLM to summarize the chat and save/merge a plan file",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        this.writePlan(ctx);
+      },
+    });
+
+    pi.registerCommand("planit:delete", {
+      description: "Delete a plan file via picker and confirmation",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        await this.deletePlan(ctx);
       },
     });
 

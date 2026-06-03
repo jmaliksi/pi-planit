@@ -28,7 +28,7 @@ export class PlanUI {
     ui: ExtensionUIContext,
   ): void {
     if (!planFilePath) {
-      this.setWidget(["📋 Planning — no file written yet (use /planit write to save)"], hasUI, ui);
+      this.setWidget(["📋 Planning — no file written yet (use /planit:write to save)"], hasUI, ui);
       return;
     }
     this.setWidget([

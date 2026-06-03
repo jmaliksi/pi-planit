@@ -255,7 +255,7 @@ describe("PlanMode — finishPlan", () => {
     await (pm as any).finishPlan(ctx);
 
     expect(notify).toHaveBeenCalledWith(
-      "Finish only works from building phase. Use /planit discard instead.",
+      "Finish only works from building phase. Use /planit:discard instead.",
       "warning",
     );
     expect(pm.isPlanMode).toBe(true);
@@ -322,7 +322,7 @@ describe("PlanMode — exitPlanMode", () => {
 
     expect(notify).toHaveBeenNthCalledWith(
       1,
-      "Plan mode exited from building. Use /planit discard to delete the plan file.",
+      "Plan mode exited from building. Use /planit:discard to delete the plan file.",
       "warning",
     );
     expect(notify).toHaveBeenNthCalledWith(

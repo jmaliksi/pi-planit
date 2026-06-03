@@ -30,28 +30,31 @@ pi --planit
 # or enter plan mode mid-session
 /planit
 
+# or enter plan mode with an initial message
+/planit i want to make a plan
+
 # you can explore the codebase and discuss the approach in chat while the agent can only use read-only tools.
 
 # when ready, save the current conversation as a plan file
-/planit write
-
-# drop out of planning to resume (or not) later
-/planit exit
+/planit:write
 
 # review the current plan
-/planit review
+/planit:review
 
 # resume a past plan
-/planit resume
+/planit:resume
 
 # throw away the plan and exit
-/planit discard
+/planit:discard
 
-# Or when ready to implement, restore full tools and inject the plan as context
-/planit build
+# when ready to implement, restore full tools and inject the plan as context
+/planit:build
 
 # delete and exit once done
-/planit finish
+/planit:finish
+
+# exit back to idle (without deleting the plan)
+/planit:exit
 ```
 
 ## Features
@@ -116,20 +119,21 @@ Plans are stored based on `planStorage` in `config.json` (see Configuration):
 
 | Method | Usage |
 |--------|-------|
-| Command | `/planit` — toggles between idle and planning |
+| Command | `/planit` — enters planning mode (no-op if already in planning) |
+| Command | `/planit <message>` — enters planning mode and forwards the message as a follow-up |
 | Flag | `--planit` — starts the session in plan mode |
 
 ### Build modes
 
 `/planit build` prompts you to choose **Agent executes automatically** or **I'll drive**. Either way, full tool access is restored and the plan is injected into the system prompt as context.
 
-Exit building mode at any time with `/planit exit`, `/planit discard`, or `/planit finish`.
+Exit building mode at any time with `/planit:exit`, `/planit:discard`, or `/planit:finish`.
 
 ### Review (`/planit review`)
 
 Opens the current plan file in your external editor (`$VISUAL`/`$EDITOR`). Pi's TUI suspends while the editor is active, then resumes when the editor exits. Changes are written back on exit.
 
-- **No plan file** → notification: "No plan written yet. Use `/planit write` to create one first."
+- **No plan file** → notification: "No plan written yet. Use `/planit:write` to create one first."
 - **No `$VISUAL`/`$EDITOR`** → notification: "External editor not set. Set `$VISUAL` or `$EDITOR` to edit."
 - **Works from any phase** (`idle`, `planning`, `building`)
 
@@ -162,15 +166,15 @@ Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 
 | Command | Description |
 |---|---|
-| `/planit` | Toggle (idle ↔ planning) |
-| `/planit exit` | Exit to idle; shows a build-warning if exiting from building |
-| `/planit discard` | Exit to idle; prompts to delete the plan file if one exists |
-| `/planit finish` | Like discard, but only works from building phase |
-| `/planit write [title]` | Ask the LLM to summarize the chat and save/merge a plan file |
-| `/planit build` | Restore full tools, inject plan as context, optionally auto-execute |
-| `/planit resume` | Browse past plans via picker; loads selected plan into planning mode |
-| `/planit delete` | Delete a plan file via picker + confirmation |
-| `/planit review` | Open the current plan in your external editor ($VISUAL/$EDITOR); Pi suspends, changes written back on exit
+| `/planit` | Enter planning mode. With arguments, enter planning and forward the message as a follow-up. |
+| `/planit:build` | Restore full tools, inject plan as context, optionally auto-execute |
+| `/planit:discard` | Exit to idle; prompts to delete the plan file if one exists |
+| `/planit:exit` | Exit plan mode and restore full tool access (no file deletion) |
+| `/planit:finish` | Like discard but only works from building phase |
+| `/planit:resume` | Browse and resume a saved plan file |
+| `/planit:review` | Open the current plan in your external editor ($VISUAL/$EDITOR); Pi suspends, changes written back on exit |
+| `/planit:write` | Ask the LLM to summarize the chat and save/merge a plan file |
+| `/planit:delete` | Delete a plan file via picker and confirmation |
 
 ## Environment Variables
 
