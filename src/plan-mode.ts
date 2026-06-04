@@ -13,6 +13,7 @@ import type {
   PlanPhase,
   PlanModeConfig,
 } from "./types";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { PlanFile, setResolvedPlansDir } from "./plan-file";
 import { BashFilter } from "./bash-filter";
 import { PlanUI } from "./ui";
@@ -40,6 +41,9 @@ export class PlanMode {
 
   /** Set when /planit:write is pending an agent response to capture and write. */
   private pendingPlanWrite: boolean = false;
+
+  /** Model active before the extension modified it, for restoration on exit. */
+  private modelBefore: Model<Api> | null = null;
 
   constructor(
     private pi: ExtensionAPI,
@@ -95,6 +99,8 @@ export class PlanMode {
         blockedTools: parsed.blockedTools ?? defaultConfig.blockedTools,
         planStorage: parsed.planStorage ?? defaultConfig.planStorage,
         systemPromptDir: parsed.systemPromptDir,
+        planningModel: parsed.planningModel ?? "auto",
+        buildingModel: parsed.buildingModel ?? "auto",
       };
     } catch (err) {
       console.error(`Planit: Failed to load config, using defaults: ${err}`);
@@ -158,6 +164,51 @@ export class PlanMode {
     return this.config.allowedTools.filter((t) => allTools.includes(t));
   }
 
+  /**
+   * Apply the phase-specific model configuration.
+   * Only does something when the config value is not "auto".
+   * Warns and falls back to auto if the model is not found or has no API key.
+   */
+  private applyModelConfig(
+    ctx: ExtensionContext,
+    modelSpec: string,
+  ): void {
+    if (modelSpec === "auto") return;
+
+    const parts = modelSpec.split("/");
+    if (parts.length !== 2) {
+      this.ui.notify(
+        `Invalid model format "${modelSpec}". Expected "provider/model-id" (e.g., "anthropic/claude-sonnet-4-20250514").`,
+        "warning",
+        ctx.hasUI,
+        ctx.ui,
+      );
+      return;
+    }
+
+    const [provider, modelId] = parts;
+    const model = ctx.modelRegistry.find(provider, modelId);
+    if (!model) {
+      this.ui.notify(
+        `Model not found: "${modelSpec}". Using currently active model.`,
+        "warning",
+        ctx.hasUI,
+        ctx.ui,
+      );
+      return;
+    }
+
+    const success = this.pi.setModel(model);
+    if (!success) {
+      this.ui.notify(
+        `No API key configured for model "${modelSpec}". Using currently active model.`,
+        "warning",
+        ctx.hasUI,
+        ctx.ui,
+      );
+    }
+  }
+
   private enterPlanning(ctx: ExtensionContext): void {
     if (this.phase === "planning") {
       this.ui.notify("Plan mode is already enabled.", "info", ctx.hasUI, ctx.ui);
@@ -167,6 +218,17 @@ export class PlanMode {
     this.cwd = ctx.cwd;
     setResolvedPlansDir(resolvePlansDir(this.cwd, this.config.planStorage ?? "global"));
     this.captureCurrentTools();
+
+    // Capture model before switching (only when config is not "auto")
+    if (this.config.planningModel !== "auto" && ctx.model) {
+      this.modelBefore = ctx.model;
+    }
+
+    // Apply planning model config
+    this.applyModelConfig(
+      ctx,
+      this.config.planningModel ?? "auto",
+    );
 
     const readOnlyTools = this.getReadOnlyTools();
     if (readOnlyTools.length === 0) {
@@ -196,6 +258,12 @@ export class PlanMode {
 
     this.phase = "idle";
     this.pendingPlanWrite = false;
+
+    // Restore model if the extension modified it (only if it was captured)
+    if (this.modelBefore) {
+      this.pi.setModel(this.modelBefore);
+      this.modelBefore = null;
+    }
 
     if (this.restoredTools && this.restoredTools.length > 0) {
       this.pi.setActiveTools(this.restoredTools);
@@ -367,6 +435,16 @@ export class PlanMode {
       this.restoredTools = this.pi.getAllTools().map((t) => t.name);
 
       if (data.phase === "planning") {
+        // Capture model before switching (only when config is not "auto")
+        if (this.config.planningModel !== "auto" && ctx.model) {
+          this.modelBefore = ctx.model;
+        }
+        // Apply planning model config
+        this.applyModelConfig(
+          ctx,
+          this.config.planningModel ?? "auto",
+        );
+
         const readOnlyTools = this.getReadOnlyTools();
         if (readOnlyTools.length > 0) {
           this.pi.setActiveTools(readOnlyTools);
@@ -383,6 +461,16 @@ export class PlanMode {
         );
         this.ui.notify("Plan mode restored from session.", "info", ctx.hasUI, ctx.ui);
       } else if (data.phase === "building") {
+        // Capture model before switching (only when config is not "auto")
+        if (this.config.buildingModel !== "auto" && ctx.model) {
+          this.modelBefore = ctx.model;
+        }
+        // Apply building model config
+        this.applyModelConfig(
+          ctx,
+          this.config.buildingModel ?? "auto",
+        );
+
         if (this.restoredTools && this.restoredTools.length > 0) {
           this.pi.setActiveTools(this.restoredTools);
         }
@@ -460,6 +548,12 @@ export class PlanMode {
       this.ui.notify("Build cancelled.", "info", ctx.hasUI, ctx.ui);
       return;
     }
+
+    // Apply building model config (modelBefore was captured on planning entry)
+    this.applyModelConfig(
+      ctx,
+      this.config.buildingModel ?? "auto",
+    );
 
     // Restore full tools
     if (this.restoredTools && this.restoredTools.length > 0) {

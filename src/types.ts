@@ -9,4 +9,8 @@ export interface PlanModeConfig {
   planStorage?: "global" | "local";
   /** Directory containing custom system prompt .md files (planning.md, building.md, writing.md). Falls back to bundled defaults if not set. */
   systemPromptDir?: string;
+  /** Model to use during planning phase. Set to "provider/model-id" (e.g., "anthropic/claude-sonnet-4-20250514") to use a specific model, or "auto" (default) to use the currently active model. */
+  planningModel?: string;
+  /** Model to use during building phase. Set to "provider/model-id" (e.g., "anthropic/claude-sonnet-4-20250514") to use a specific model, or "auto" (default) to use the currently active model. */
+  buildingModel?: string;
 }

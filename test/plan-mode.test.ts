@@ -587,6 +587,258 @@ describe("PlanMode — session_tree", () => {
   });
 });
 
+// ── Phase X Tests: Model Config ──────────────────────────────────────
+
+describe("PlanMode — model config", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-model-test-" + Date.now();
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  function createMockWithModel(
+    availableTools: { name: string }[] = [],
+    model: { provider: string; modelId: string } | null = { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
+  ) {
+    const calls: string[][] = [];
+    const setModelCalls: { provider: string; modelId: string }[] = [];
+
+    const pi = {
+      getAllTools: vi.fn(() => availableTools),
+      setActiveTools: vi.fn((tools: string[]) => {
+        calls.push([...tools]);
+      }),
+      setModel: vi.fn((m: any) => {
+        setModelCalls.push({ provider: m.provider, modelId: m.modelId });
+        return true;
+      }),
+      getContext: vi.fn(() => ({
+        hasUI: true,
+        cwd: "/tmp/test-project",
+        ui: {
+          notify: vi.fn(),
+          setStatus: vi.fn(),
+          setWidget: vi.fn(),
+          select: vi.fn(),
+          confirm: vi.fn(),
+        },
+      })),
+      on: vi.fn(),
+      registerCommand: vi.fn(),
+      registerFlag: vi.fn(),
+      registerShortcut: vi.fn(),
+      registerTool: vi.fn(),
+      sendUserMessage: vi.fn(),
+      getFlag: vi.fn(() => undefined),
+      appendEntry: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    // Override model on each getContext call
+    const originalGetContext = pi.getContext as vi.Mock;
+    pi.getContext = vi.fn(() => {
+      const ctx = originalGetContext();
+      (ctx as any).model = model;
+      (ctx as any).modelRegistry = {
+        find: vi.fn((provider: string, modelId: string) => {
+          // Return the model if it matches, or fall back to hardcoded known models
+          if (model && model.provider === provider && model.modelId === modelId) {
+            return { provider, modelId };
+          }
+          if (provider === "anthropic" && modelId === "claude-sonnet-4-20250514") {
+            return { provider, modelId };
+          }
+          if (provider === "openai" && modelId === "gpt-4o") {
+            return { provider, modelId };
+          }
+          return null;
+        }),
+      };
+      return ctx;
+    });
+
+    return { pi, calls, setModelCalls };
+  }
+
+  describe("enterPlanning", () => {
+    it("applies model config when set (non-auto)", () => {
+      const mock = createMockWithModel([{ name: "read" }]);
+      const pm = new PlanMode(mock.pi);
+
+      // Override config with a specific model
+      (pm as any).config = { ...pm.getConfig(), planningModel: "anthropic/claude-sonnet-4-20250514" };
+      const ctx = mock.pi.getContext()!;
+
+      (pm as any).enterPlanning(ctx);
+
+      expect(mock.setModelCalls).toHaveLength(1);
+      expect(mock.setModelCalls[0]).toEqual({ provider: "anthropic", modelId: "claude-sonnet-4-20250514" });
+    });
+
+    it("does nothing when model is \"auto\" (default)", () => {
+      const mock = createMockWithModel([{ name: "read" }]);
+      const pm = new PlanMode(mock.pi);
+      const ctx = mock.pi.getContext()!;
+
+      // Default config has planningModel: "auto"
+      (pm as any).enterPlanning(ctx);
+
+      expect(mock.setModelCalls).toHaveLength(0);
+    });
+
+    it("warns and falls back when model has no API key", () => {
+      const { pi } = createMockWithModel([{ name: "read" }], { provider: "openai", modelId: "gpt-4o" });
+      const pm = new PlanMode(pi);
+
+      // Override setModel to return false (no API key)
+      const mockSetModel = vi.mocked((pi as any).setModel);
+      mockSetModel.mockReturnValue(false);
+
+      (pm as any).config = { ...pm.getConfig(), planningModel: "openai/gpt-4o" };
+      const ctx = pi.getContext()!;
+
+      (pm as any).enterPlanning(ctx);
+
+      // setModel should be called with the model
+      expect(mockSetModel).toHaveBeenCalledWith({ provider: "openai", modelId: "gpt-4o" });
+      const notify = (ctx as any).ui.notify as vi.Mock;
+      expect(notify).toHaveBeenCalledWith(
+        "No API key configured for model \"openai/gpt-4o\". Using currently active model.",
+        "warning",
+      );
+    });
+
+    it("warns and falls back when model doesn't exist", () => {
+      const { pi } = createMockWithModel([{ name: "read" }]);
+      const pm = new PlanMode(pi);
+      (pm as any).config = { ...pm.getConfig(), planningModel: "anthropic/nonexistent-model" };
+      const ctx = pi.getContext()!;
+
+      (pm as any).enterPlanning(ctx);
+
+      const notify = (ctx as any).ui.notify as vi.Mock;
+      expect(notify).toHaveBeenCalledWith(
+        "Model not found: \"anthropic/nonexistent-model\". Using currently active model.",
+        "warning",
+      );
+    });
+  });
+
+  describe("exitToIdle", () => {
+    it("restores model on exit after planning", () => {
+      const mock = createMockWithModel([{ name: "read" }]);
+      const pm = new PlanMode(mock.pi);
+      const ctx = mock.pi.getContext()!;
+
+      (pm as any).config = { ...pm.getConfig(), planningModel: "anthropic/claude-sonnet-4-20250514" };
+      (pm as any).enterPlanning(ctx);
+      expect(mock.setModelCalls).toHaveLength(1);
+
+      mock.setModelCalls.length = 0; // Clear
+
+      (pm as any).exitToIdle(ctx);
+
+      // Should restore to the original model
+      expect(mock.setModelCalls).toHaveLength(1);
+      expect(mock.setModelCalls[0]).toEqual({ provider: "anthropic", modelId: "claude-sonnet-4-20250514" });
+    });
+
+    it("restores model on exit after building", async () => {
+      const mock = createMockWithModel([{ name: "read" }]);
+      const pm = new PlanMode(mock.pi);
+      const ctx = mock.pi.getContext()!;
+
+      (pm as any).config = {
+        ...pm.getConfig(),
+        planningModel: "anthropic/claude-sonnet-4-20250514",
+        buildingModel: "openai/gpt-4o",
+      };
+
+      // Simulate planning phase
+      (pm as any).enterPlanning(ctx);
+      expect(mock.setModelCalls).toHaveLength(1);
+
+      mock.setModelCalls.length = 0; // Clear
+
+      // Simulate transition to building
+      vi.spyOn((pm as any).ui, "showBuildPrompt").mockResolvedValue("auto");
+      await (pm as any).startBuild(ctx);
+      expect(mock.setModelCalls).toHaveLength(1);
+
+      mock.setModelCalls.length = 0; // Clear
+
+      // Exit to idle
+      (pm as any).exitToIdle(ctx);
+
+      // Should restore to the original model (captured before entering building)
+      expect(mock.setModelCalls).toHaveLength(1);
+      expect(mock.setModelCalls[0]).toEqual({ provider: "anthropic", modelId: "claude-sonnet-4-20250514" });
+    });
+
+    it("does nothing when no model was captured (auto config)", () => {
+      const mock = createMockWithModel([{ name: "read" }], null);
+      const pm = new PlanMode(mock.pi);
+      const ctx = mock.pi.getContext()!;
+
+      (pm as any).enterPlanning(ctx);
+      expect(mock.setModelCalls).toHaveLength(0);
+
+      mock.setModelCalls.length = 0; // Clear
+
+      (pm as any).exitToIdle(ctx);
+
+      expect(mock.setModelCalls).toHaveLength(0);
+    });
+  });
+
+  describe("restoreState", () => {
+    it("applies model config when restoring from building", () => {
+      const mock = createMockWithModel([
+        { name: "read" },
+        { name: "edit" },
+        { name: "write" },
+      ]);
+      const pm = new PlanMode(mock.pi);
+      const ctx = mock.pi.getContext()!;
+
+      (pm as any).config = { ...pm.getConfig(), buildingModel: "anthropic/claude-sonnet-4-20250514" };
+
+      const projectDir = path.join(tmpHome, ".pi", "agent", "plans", "--tmp--test-project");
+      fs.mkdirSync(projectDir, { recursive: true });
+      const planPath = path.join(projectDir, "test-plan-2026-01-01T00-00-00.md");
+      const planContent = "# Test Plan\n\nContent.";
+      fs.writeFileSync(planPath, planContent);
+
+      (ctx as any).sessionManager = {
+        getBranch: () => [{
+          type: "custom",
+          customType: "planit",
+          data: { phase: "building", planFilePath: planPath, planContent, restoredTools: ["read", "edit", "write"] },
+        }],
+      };
+
+      (pm as any).restoreState(ctx);
+
+      expect(mock.setModelCalls).toHaveLength(1);
+      expect(mock.setModelCalls[0]).toEqual({ provider: "anthropic", modelId: "claude-sonnet-4-20250514" });
+      expect(pm.isBuilding).toBe(true);
+    });
+  });
+});
+
 // ── Phase 6 Tests: PlanFile.listPlans ────────────────────────────────
 
 describe("PlanFile.listPlans", () => {

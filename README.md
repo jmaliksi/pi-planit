@@ -157,6 +157,10 @@ Plan mode configuration is stored in `~/.pi/agent/extensions/pi-planit/config.js
 - **`blockedTools`** — tools always blocked at the event handler level. Default: `edit`, `write`, `ast_rewrite`.
 - **`planStorage`** — where plan files are stored: `"global"` (default, `~/.pi/agent/plans/`) or `"local"` (`<cwd>/.pi/plans/`).
 - **`systemPromptDir`** — directory containing custom system prompt `.md` files (`planning.md`, `building.md`, `writing.md`). Falls back to bundled defaults if not set.
+- **`planningModel`** — Model to use during planning phase. Set to `"provider/model-id"` (e.g., `"anthropic/claude-sonnet-4-20250514"`) to use a specific model, or `"auto"` (default) to use the currently active model. Always requires the provider prefix.
+- **`buildingModel`** — Model to use during building phase. Same format as `planningModel`.
+
+If a specified model is not found or has no API key configured, a warning is shown and the model falls back to `"auto"` (the current model remains unchanged). The original model is always restored when exiting the phase.
 
 Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 
