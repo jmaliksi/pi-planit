@@ -10,7 +10,13 @@
     "type": "git",
     "url": "git+https://github.com/jmaliksi/pi-planit.git"
   },
-  "keywords": ["pi-package"],
+  "keywords": [
+    "coding-agent",
+    "extension",
+    "pi",
+    "pi-package",
+    "plan-review"
+  ],
   "files": [
     "dist/"
   ],
