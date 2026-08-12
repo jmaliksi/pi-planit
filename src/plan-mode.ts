@@ -488,6 +488,22 @@ export class PlanMode {
   }
 
   /**
+   * Return to plan mode (read-only) from building. Plan file and tools are preserved.
+   */
+  private replan(ctx: ExtensionContext): void {
+    if (this.phase !== "building") {
+      this.ui.notify(
+        "Not in building phase. Use /planit:replan only after /planit:build.",
+        "warning",
+        ctx.hasUI,
+        ctx.ui,
+      );
+      return;
+    }
+    this.enterPlanning(ctx);
+  }
+
+  /**
    * Discard: exit to idle and offer to delete the plan file. Works from any phase.
    */
   private async discardPlan(ctx: ExtensionContext): Promise<void> {
@@ -732,7 +748,7 @@ export class PlanMode {
             this.ui.notify("Plan mode is already enabled.", "info", ctx.hasUI, ctx.ui);
           } else {
             this.ui.notify(
-              "Already in building phase. Use /planit:exit, /planit:discard, or /planit:finish to leave.",
+              "Already in building phase. Use /planit:exit, /planit:discard, /planit:finish, or /planit:replan to return to plan mode.",
               "warning",
               ctx.hasUI,
               ctx.ui,
@@ -748,7 +764,7 @@ export class PlanMode {
         }
         if (this.phase === "building") {
           this.ui.notify(
-            "Already in building phase. Use /planit:exit, /planit:discard, or /planit:finish to leave.",
+            "Already in building phase. Use /planit:exit, /planit:discard, /planit:finish, or /planit:replan to return to plan mode.",
             "warning",
             ctx.hasUI,
             ctx.ui,
@@ -766,6 +782,13 @@ export class PlanMode {
       description: "Restore full tools, inject plan as context, optionally auto-execute",
       handler: async (_args: string, ctx: ExtensionContext) => {
         await this.startBuild(ctx);
+      },
+    });
+
+    pi.registerCommand("planit:replan", {
+      description: "Return to plan mode (read-only) from building",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        this.replan(ctx);
       },
     });
 

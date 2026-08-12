@@ -122,6 +122,59 @@ describe("PlanMode — tool restoration", () => {
   });
 });
 
+// ── Phase: replan (building → planning) ──────────────────────────────
+
+describe("PlanMode — replan", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns to read-only planning from building", () => {
+    const fullTools = [
+      { name: "read" },
+      { name: "edit" },
+      { name: "write" },
+      { name: "bash" },
+    ];
+    const { pi, calls } = createMockPI(fullTools);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+
+    (pm as any).phase = "building";
+    (pm as any).restoredTools = ["read", "edit", "write", "bash"];
+
+    (pm as any).replan(ctx);
+
+    expect(pm.isPlanMode).toBe(true);
+    expect(pm.isBuilding).toBe(false);
+
+    // Read-only tools are re-applied (calls[0] is restricted set)
+    const restricted = calls[calls.length - 1];
+    expect(restricted).toContain("read");
+    expect(restricted).toContain("bash");
+    expect(restricted).not.toContain("edit");
+    expect(restricted).not.toContain("write");
+  });
+
+  it("warns when not in building phase", () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pm = new PlanMode(pi);
+    const ctx = pi.getContext()!;
+    const notify = vi.fn();
+    (ctx as any).hasUI = true;
+    (ctx as any).ui = { notify, setStatus: vi.fn(), setWidget: vi.fn() };
+
+    (pm as any).phase = "planning";
+
+    (pm as any).replan(ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      "Not in building phase. Use /planit:replan only after /planit:build.",
+      "warning",
+    );
+  });
+});
+
 // ── Phase 2 Tests: discardPlan ────────────────────────────────────────
 
 describe("PlanMode — discardPlan", () => {

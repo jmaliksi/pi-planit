@@ -26,7 +26,7 @@ Extension for pi.dev providing chat-first plan mode — safe codebase exploratio
 | `src/path-utils.ts` | Path resolution helpers |
 
 ## Commands (user-facing)
-`/planit` toggle · `/planit write [title]` · `/planit build` · `/planit exit` · `/planit resume` · `/planit delete` · `/planit discard` · `/planit review`
+`/planit` toggle · `/planit write [title]` · `/planit build` · `/planit replan` · `/planit exit` · `/planit resume` · `/planit delete` · `/planit discard` · `/planit review`
 
 ## Build & Test
 ```bash
@@ -44,6 +44,8 @@ idle ──/planit──> planning (read-only tools + filtered bash)
                       ├── /planit write ──> LLM summarizes chat, writes/merges plan file, stays in planning
                       │
                       ├── /planit build ──> UI asks "auto or user-driven?" ──> building (full tools)
+                      │                                                              │
+                      │                                         /planit replan ──────────┘  (back to planning)
                       │                                                              │
                       │                                                    /planit exit/cancel/off ──> idle
                       │
