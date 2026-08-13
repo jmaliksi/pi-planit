@@ -63,3 +63,9 @@ idle ──/planit──> planning (read-only tools + filtered bash)
 - `BashFilter` uses whitelist-first + denylist override (must pass both to be allowed)
 - No side effects in plan mode — tool gating enforced at both `setActiveTools()` and event handler levels
 - Config defaults are written to disk on first run if `config.json` doesn't exist
+
+## Changelog
+- **Always update `CHANGELOG.md`** before a release. Add a new section for the upcoming version with a date and categorized entries (`Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`).
+- Use `[Unreleased]` at the top for changes not yet tagged.
+- Group related commits; don't litter with per-commit entries unless they're independently meaningful.
+- Version numbers follow semver. Review the changelog with stakeholders before committing.
