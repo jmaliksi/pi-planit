@@ -1,6 +1,6 @@
 {
   "name": "pi-planit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Chat based plan mode for Pi.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
