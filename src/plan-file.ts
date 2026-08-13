@@ -134,18 +134,11 @@ export class PlanFile {
   /**
    * Load an existing plan file from disk into this instance.
    *
-   * When `content` is provided, it is used directly (bypassing disk I/O)
-   * and also written to disk to keep the file in sync.
-   *
-   * @throws If the file does not exist and no content is provided.
+   * Always reads from disk — never trusts an external snapshot.
    */
-  load(filePath: string, content?: string): void {
+  load(filePath: string): void {
     this.filePath = filePath;
-
-    if (content !== undefined) {
-      this.content = content;
-      fs.writeFileSync(filePath, content, "utf-8");
-    } else if (fs.existsSync(filePath)) {
+    if (fs.existsSync(filePath)) {
       this.content = fs.readFileSync(filePath, "utf-8");
     } else {
       throw new Error(`Plan file not found: ${filePath}`);

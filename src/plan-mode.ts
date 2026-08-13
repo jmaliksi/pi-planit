@@ -331,6 +331,12 @@ export class PlanMode {
       ctx.ui,
     );
     this.persistState(ctx);
+
+    if (this.phase === "building") {
+      // In user-driven build mode, don't auto-continue after a plan write.
+      // The agent is at a natural pause — user reviews/edits then triggers next cycle.
+      this.ui.notify("Plan updated — continue when ready.", "info", ctx.hasUI, ctx.ui);
+    }
   }
 
   // ── State Persistence ──────────────────────────────────────────────
@@ -361,7 +367,9 @@ export class PlanMode {
       if (!data?.phase || data.phase === "idle") return;
 
       if (data.planFilePath) {
-        this.planFile.load(data.planFilePath, data.planContent);
+        // Always re-read from disk to catch edits from external editors,
+        // branch switches, or manual file modifications.
+        this.planFile.load(data.planFilePath);
       }
 
       this.restoredTools = this.pi.getAllTools().map((t) => t.name);
