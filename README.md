@@ -92,7 +92,13 @@ Replace session-based auth with stateless JWT tokens. Key changes:
 
 ### Auto-summarize and merge
 
-Run `/planit write` to ask the LLM to summarize the conversation into a plan document. If a plan file already exists, it semantically merges the new content rather than overwriting.
+Run `/planit write` to ask the LLM to summarize the conversation into a plan document. You can also provide specific instructions for the summary, for example: `/planit:write include the meta notes and lessons we discussed`. 
+
+If a plan file already exists, it semantically merges the new content rather than overwriting. This works even in **build mode**.
+
+**Note on arguments:**
+- If a plan file **does not yet exist**, a single-word argument (no spaces) is treated as the plan's title (e.g., `/planit:write my_great_plan`). Any multi-word argument is treated as instructions and the default title `plan` is used.
+- If a plan file **already exists**, the argument is always treated as additional instructions for the LLM.
 
 ### Session restoration
 
@@ -173,7 +179,7 @@ Note: `bash` is in `allowedTools` but is further filtered by `BashFilter`.
 | `/planit:finish` | Like discard but only works from building phase |
 | `/planit:resume` | Browse and resume a saved plan file |
 | `/planit:review` | Open the current plan in your external editor ($VISUAL/$EDITOR); Pi suspends, changes written back on exit |
-| `/planit:write` | Ask the LLM to summarize the chat and save/merge a plan file |
+| `/planit:write [args]` | Ask the LLM to summarize the chat and save/merge a plan file. Single-word `[args]` sets the plan title; multi-word `[args]` provides instructions to the LLM. |
 | `/planit:delete` | Delete a plan file via picker and confirmation |
 
 ## Environment Variables

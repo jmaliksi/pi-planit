@@ -407,16 +407,37 @@ export class PlanMode {
 
   /**
    * Trigger the LLM to summarize the chat and write/merge the plan file.
+   * @param ctx The extension context.
+   * @param args Optional arguments. If provided, these are treated as additional instructions to the LLM.
+   *             If no plan file exists yet, the first argument is treated as the plan title.
    */
-  private writePlan(ctx: ExtensionContext, title?: string): void {
-    if (this.phase !== "planning") {
-      this.ui.notify("Not in planning mode. Use /planit to start.", "warning", ctx.hasUI, ctx.ui);
+  private writePlan(ctx: ExtensionContext, args?: string): void {
+    if (this.phase !== "planning" && this.phase !== "building") {
+      this.ui.notify("Not in planning or building mode. Use /planit to start.", "warning", ctx.hasUI, ctx.ui);
       return;
+    }
+
+    let title: string | undefined;
+    let instructions: string | undefined;
+
+    if (args && args.trim().length > 0) {
+      const trimmedArgs = args.trim();
+      if (!this.planFile.getFilePath()) {
+        // On the first write, treat single-word arguments as titles, and multi-word arguments as instructions.
+        if (/\s/.test(trimmedArgs)) {
+          title = "plan";
+          instructions = trimmedArgs;
+        } else {
+          title = trimmedArgs;
+        }
+      } else {
+        instructions = trimmedArgs;
+      }
     }
 
     // Initialize file path if this is the first write
     if (!this.planFile.getFilePath()) {
-      this.planFile.init(this.cwd, title ?? "plan");
+      this.planFile.init(ctx.cwd, title ?? "plan");
     }
 
     this.pendingPlanWrite = true;
@@ -425,7 +446,9 @@ export class PlanMode {
       ? `\n\nExisting plan file content to merge with:\n\`\`\`\n${this.planFile.getContent()}\n\`\`\``
       : "";
 
-    const instruction = `${this.writingPrompt}${existingContent}`;
+    const basePrompt = this.writingPrompt;
+    const extraInstructions = instructions ? `\n\nAdditional instructions: ${instructions}` : "";
+    const instruction = `${basePrompt}${extraInstructions}${existingContent}`;
 
     this.pi.sendUserMessage(instruction, { deliverAs: "followUp" });
   }
@@ -829,8 +852,8 @@ export class PlanMode {
 
     pi.registerCommand("planit:write", {
       description: "Ask the LLM to summarize the chat and save/merge a plan file",
-      handler: async (_args: string, ctx: ExtensionContext) => {
-        this.writePlan(ctx);
+      handler: async (args: string, ctx: ExtensionContext) => {
+        this.writePlan(ctx, args);
       },
     });
 
