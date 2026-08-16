@@ -8,6 +8,7 @@ import type {
   ToolCallEvent,
   BeforeAgentStartEvent,
   AgentEndEvent,
+  ContextEvent,
 } from "@earendil-works/pi-coding-agent";
 import type {
   PlanPhase,
@@ -41,6 +42,12 @@ export class PlanMode {
   /** Set when /planit:write is pending an agent response to capture and write. */
   private pendingPlanWrite: boolean = false;
 
+  /** Texts of the /planit:write instructions sent to the agent (for duplication filtering). */
+  private writeInstructionTexts: string[] = [];
+
+  /** Plan response texts captured from the agent, recorded before overwrite (for duplication filtering). */
+  private planResponseTexts: string[] = [];
+
   constructor(
     private pi: ExtensionAPI,
     planFile: PlanFile = new PlanFile(),
@@ -71,6 +78,7 @@ export class PlanMode {
       ],
       blockedTools: ["edit", "write", "ast_rewrite"],
       planStorage: "global",
+      avoidPlanDuplication: true,
     };
 
     try {
@@ -95,6 +103,7 @@ export class PlanMode {
         blockedTools: parsed.blockedTools ?? defaultConfig.blockedTools,
         planStorage: parsed.planStorage ?? defaultConfig.planStorage,
         systemPromptDir: parsed.systemPromptDir,
+        avoidPlanDuplication: parsed.avoidPlanDuplication ?? defaultConfig.avoidPlanDuplication,
       };
     } catch (err) {
       console.error(`Planit: Failed to load config, using defaults: ${err}`);
@@ -272,6 +281,59 @@ export class PlanMode {
     return undefined;
   }
 
+  // ── Context Filtering: shed planning noise during build ─────────────
+
+  private messageText(content: string | Array<{ type: string; text?: string }>): string {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter((c) => c.type === "text" && typeof c.text === "string")
+        .map((c) => c.text as string)
+        .join("\n");
+    }
+    return "";
+  }
+
+  /**
+   * Filter LLM context while building to preserve tokens.
+   * Active only when a plan file has content (the plan is injected via the system prompt).
+   *
+   * - avoidPlanDuplication: drop the /planit:write instruction messages and the captured
+   *   plan response messages, since the same plan is already injected via the system prompt.
+   *   The planning conversation is otherwise left intact.
+   */
+  onContext(event: ContextEvent): { messages?: ContextEvent["messages"] } | undefined {
+    if (this.phase !== "building") return undefined;
+    if (!this.planFile.hasContent()) return undefined;
+
+    const avoidDup = this.config.avoidPlanDuplication !== false;
+    if (!avoidDup) return undefined;
+
+    const messages = event.messages as Array<Record<string, any>>;
+    const result: Array<Record<string, any>> = [];
+
+    for (const msg of messages) {
+      if (avoidDup && msg.role === "user") {
+        const text = this.messageText(msg.content);
+        if (this.writeInstructionTexts.includes(text)) {
+          continue;
+        }
+      }
+
+      if (avoidDup && msg.role === "assistant") {
+        const text = this.messageText(msg.content);
+        if (this.planResponseTexts.includes(text)) {
+          continue;
+        }
+      }
+
+      result.push(msg);
+    }
+
+    if (result.length === messages.length) return undefined;
+    return { messages: result as ContextEvent["messages"] };
+  }
+
   // ── Session Lifecycle ──────────────────────────────────────────────
 
   onSessionStart(_event: unknown, ctx: ExtensionContext): void {
@@ -316,6 +378,8 @@ export class PlanMode {
       this.ui.notify("Could not capture plan summary from agent response.", "warning", ctx.hasUI, ctx.ui);
       return;
     }
+
+    this.planResponseTexts.push(lastAssistantText);
 
     // Initialize file on first write
     if (!this.planFile.getFilePath()) {
@@ -457,6 +521,8 @@ export class PlanMode {
     const basePrompt = this.writingPrompt;
     const extraInstructions = instructions ? `\n\nAdditional instructions: ${instructions}` : "";
     const instruction = `${basePrompt}${extraInstructions}${existingContent}`;
+
+    this.writeInstructionTexts.push(instruction);
 
     this.pi.sendUserMessage(instruction, { deliverAs: "followUp" });
   }
@@ -888,6 +954,15 @@ export class PlanMode {
 
     pi.on("before_agent_start", (event) => {
       return this.onBeforeAgentStart(event);
+    });
+
+    pi.on("context", (event) => {
+      try {
+        return this.onContext(event);
+      } catch (err) {
+        console.error(`Planit: context filter error: ${err}`);
+        return undefined;
+      }
     });
 
     pi.on("session_start", (_event, ctx) => {

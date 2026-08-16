@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Token preservation during build: a new `context`-event filter sheds plan noise once a plan file has content
+  - `avoidPlanDuplication` (default `true`): drops the `/planit:write` instruction and captured plan-response messages from build context, since the plan is already injected via the system prompt. The planning conversation is otherwise left intact.
+- Writing prompt now requires self-contained plans: the plan must capture concrete file paths, symbols, and decisions explicitly so it remains usable when resumed in a fresh session
+
 ## [1.0.1] — 2026-08-13
 
 ### Fixes

@@ -688,3 +688,91 @@ describe("PlanFile.listPlans", () => {
     expect(plans[1].filename).toBe("old-plan-2026-01-01T00-00-00.md");
   });
 });
+
+// ── Phase 7 Tests: context filtering during build ─────────────────────
+
+describe("PlanMode — onContext build filter", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makePlanMode(overrides: Record<string, any> = {}): PlanMode {
+    const { pi } = createMockPI([{ name: "read" }, { name: "edit" }, { name: "write" }]);
+    const pm = new PlanMode(pi);
+    (pm as any).phase = "building";
+    Object.assign(pm, overrides);
+    return pm;
+  }
+
+  function assistantText(text: string, ts: number): Record<string, any> {
+    return { role: "assistant", content: [{ type: "text", text }], timestamp: ts };
+  }
+
+  it("returns undefined (no filtering) when not building", () => {
+    const pm = makePlanMode();
+    (pm as any).phase = "idle";
+    const event = { messages: [{ role: "user", content: "hello", timestamp: 1000 }] };
+    expect(pm.onContext(event)).toBeUndefined();
+  });
+
+  it("returns undefined (no filtering) when no plan file has content", () => {
+    const pm = makePlanMode();
+    const event = { messages: [{ role: "user", content: "hello", timestamp: 1000 }] };
+    expect(pm.onContext(event)).toBeUndefined();
+  });
+
+  it("drops the plan-write instruction and plan response when avoidPlanDuplication is on", () => {
+    const pm = makePlanMode();
+    (pm as any).planFile.content = "# Plan\n\ncontent";
+    (pm as any).writeInstructionTexts = ["WRITE_INSTRUCTION"];
+    (pm as any).planResponseTexts = ["# Plan\n\ncontent"];
+
+    const writeInstruction = { role: "user", content: "WRITE_INSTRUCTION", timestamp: 1000 };
+    const planResponse = assistantText("# Plan\n\ncontent", 1000);
+    const normalUser = { role: "user", content: "fix this", timestamp: 3000 };
+
+    const event = { messages: [writeInstruction, planResponse, normalUser] };
+    const result = pm.onContext(event);
+
+    expect(result).toBeDefined();
+    expect(result!.messages).not.toContain(writeInstruction);
+    expect(result!.messages).not.toContain(planResponse);
+    expect(result!.messages).toContain(normalUser);
+  });
+
+  it("keeps the planning conversation intact (no tool-turn stripping)", () => {
+    const pm = makePlanMode();
+    (pm as any).planFile.content = "# Plan\n\ncontent";
+
+    const toolCallMsg = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "t1", name: "read" }],
+      timestamp: 1000,
+    };
+    const toolResultMsg = {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "read",
+      content: [{ type: "text", text: "FILE CONTENT" }],
+      timestamp: 1000,
+    };
+
+    const event = { messages: [toolCallMsg, toolResultMsg] };
+    expect(pm.onContext(event)).toBeUndefined();
+  });
+
+  it("keeps plan-write exchange when avoidPlanDuplication is disabled", () => {
+    const pm = makePlanMode({ config: { avoidPlanDuplication: false } });
+    (pm as any).planFile.content = "# Plan\n\ncontent";
+    (pm as any).writeInstructionTexts = ["WRITE_INSTRUCTION"];
+    (pm as any).planResponseTexts = ["# Plan\n\ncontent"];
+
+    const writeInstruction = { role: "user", content: "WRITE_INSTRUCTION", timestamp: 1000 };
+    const event = { messages: [writeInstruction, assistantText("# Plan\n\ncontent", 1000)] };
+    expect(pm.onContext(event)).toBeUndefined();
+  });
+});

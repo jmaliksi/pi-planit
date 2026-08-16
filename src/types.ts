@@ -9,4 +9,6 @@ export interface PlanModeConfig {
   planStorage?: "global" | "local";
   /** Directory containing custom system prompt .md files (planning.md, building.md, writing.md). Falls back to bundled defaults if not set. */
   systemPromptDir?: string;
+  /** When building, drop the /planit:write exchange from LLM context (the plan is injected via the system prompt). Only active when a plan file has content. */
+  avoidPlanDuplication?: boolean;
 }
