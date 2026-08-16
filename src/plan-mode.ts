@@ -37,7 +37,11 @@ export class PlanMode {
   private planningPrompt: string = "";
   private buildingPrompt: string = "";
   private writingPrompt: string = "";
+  private manualBuildPause: string = "";
   private promptsLoaded: boolean = false;
+
+  /** Build drive mode. `null` when not building or before a build mode is chosen. */
+  private buildMode: "auto" | "manual" | null = null;
 
   /** Set when /planit:write is pending an agent response to capture and write. */
   private pendingPlanWrite: boolean = false;
@@ -104,6 +108,7 @@ export class PlanMode {
         planStorage: parsed.planStorage ?? defaultConfig.planStorage,
         systemPromptDir: parsed.systemPromptDir,
         avoidPlanDuplication: parsed.avoidPlanDuplication ?? defaultConfig.avoidPlanDuplication,
+        manualBuildPause: parsed.manualBuildPause,
       };
     } catch (err) {
       console.error(`Planit: Failed to load config, using defaults: ${err}`);
@@ -152,6 +157,7 @@ export class PlanMode {
     this.planningPrompt = this.loadPrompt(ctx, "planning");
     this.buildingPrompt = this.loadPrompt(ctx, "building");
     this.writingPrompt = this.loadPrompt(ctx, "writing");
+    this.manualBuildPause = this.config.manualBuildPause ?? this.loadPrompt(ctx, "building-manual");
     this.promptsLoaded = true;
   }
 
@@ -205,6 +211,7 @@ export class PlanMode {
 
     this.phase = "idle";
     this.pendingPlanWrite = false;
+    this.buildMode = null;
 
     if (this.restoredTools && this.restoredTools.length > 0) {
       this.pi.setActiveTools(this.restoredTools);
@@ -273,8 +280,12 @@ export class PlanMode {
       const interpolated = this.buildingPrompt
         .replaceAll("{planFilePath}", fileRef)
         .replaceAll("{planContent}", this.planFile.getContent());
+      const manualBlock =
+        this.buildMode === "manual" && this.manualBuildPause
+          ? `\n\n${this.manualBuildPause}`
+          : "";
       return {
-        systemPrompt: `${event.systemPrompt}\n\n${interpolated}`,
+        systemPrompt: `${event.systemPrompt}\n\n${interpolated}${manualBlock}`,
       };
     }
 
@@ -546,17 +557,33 @@ export class PlanMode {
   /**
    * Transition to building phase: restore full tools, inject plan as context.
    */
-  private async startBuild(ctx: ExtensionContext): Promise<void> {
+  private async startBuild(ctx: ExtensionContext, forcedMode?: string): Promise<void> {
     if (this.phase !== "planning") {
       this.ui.notify("Not in planning mode.", "warning", ctx.hasUI, ctx.ui);
       return;
     }
 
-    const mode = await this.ui.showBuildPrompt(ctx.hasUI, ctx.ui);
+    let mode: "auto" | "manual" | null;
+    if (forcedMode === "auto" || forcedMode === "manual") {
+      mode = forcedMode;
+    } else {
+      if (forcedMode && forcedMode !== "") {
+        this.ui.notify(
+          `Unknown build mode "${forcedMode}". Expected "auto" or "manual".`,
+          "warning",
+          ctx.hasUI,
+          ctx.ui,
+        );
+      }
+      mode = await this.ui.showBuildPrompt(ctx.hasUI, ctx.ui);
+    }
+
     if (mode === null) {
       this.ui.notify("Build cancelled.", "info", ctx.hasUI, ctx.ui);
       return;
     }
+
+    this.buildMode = mode;
 
     // Restore full tools
     if (this.restoredTools && this.restoredTools.length > 0) {
@@ -876,9 +903,10 @@ export class PlanMode {
 
     // ── Colon-prefixed subcommands ──
     pi.registerCommand("planit:build", {
-      description: "Restore full tools, inject plan as context, optionally auto-execute",
-      handler: async (_args: string, ctx: ExtensionContext) => {
-        await this.startBuild(ctx);
+      description: "Restore full tools, inject plan as context, optionally auto-execute. Usage: /planit:build [auto|manual]",
+      handler: async (args: string, ctx: ExtensionContext) => {
+        const forcedMode = args.trim().toLowerCase();
+        await this.startBuild(ctx, forcedMode);
       },
     });
 

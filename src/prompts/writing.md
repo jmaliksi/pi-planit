@@ -9,3 +9,6 @@ The plan may later be resumed or reused in a fresh session where the original ex
 - Be explicit and concrete: include exact file paths, symbol names, function signatures, and line-level anchors where decisions depend on them.
 - Do not write "as discussed" or "per the earlier exploration" — state the conclusion directly.
 - Capture non-obvious context (gotchas, constraints, chosen tradeoffs) in the plan; do not leave it implicit in the conversation.
+
+### Step-by-Step Structure
+Organize the plan as an ordered list of discrete, numbered steps (### Step 1, ### Step 2, ...). Each step must be small and concrete enough to be implemented in a single action, with a clear, verifiable outcome. This lets the plan be executed incrementally — one step at a time — rather than all at once. Where order matters, make dependencies explicit between steps.

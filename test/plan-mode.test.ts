@@ -776,3 +776,120 @@ describe("PlanMode — onContext build filter", () => {
     expect(pm.onContext(event)).toBeUndefined();
   });
 });
+
+// ── Manual Build Mode: Prompt Injection ──────────────────────────────
+
+describe("PlanMode — manual build prompt injection", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeBuildingPlanMode(overrides: Record<string, any> = {}): PlanMode {
+    const { pi } = createMockPI([{ name: "read" }, { name: "edit" }, { name: "write" }]);
+    const pm = new PlanMode(pi);
+    (pm as any).phase = "building";
+    (pm as any).planFile.content = "# Plan\n\nstep 1\nstep 2";
+    (pm as any).buildingPrompt = "[PLAN CONTEXT]\n{planContent}";
+    (pm as any).manualBuildPause = "PAUSE_BLOCK";
+    Object.assign(pm, overrides);
+    return pm;
+  }
+
+  function beforeAgentStart(systemPrompt: string): { systemPrompt: string } {
+    return { type: "before_agent_start", prompt: "go", systemPrompt, systemPromptOptions: {} as any };
+  }
+
+  it("appends the pause block in manual build mode", () => {
+    const pm = makeBuildingPlanMode({ buildMode: "manual" });
+    const result = pm.onBeforeAgentStart(beforeAgentStart("BASE"));
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("PAUSE_BLOCK");
+    expect(result!.systemPrompt).toContain("step 1");
+  });
+
+  it("does not append the pause block in auto build mode", () => {
+    const pm = makeBuildingPlanMode({ buildMode: "auto" });
+    const result = pm.onBeforeAgentStart(beforeAgentStart("BASE"));
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).not.toContain("PAUSE_BLOCK");
+  });
+
+  it("does not append the pause block when buildMode is null", () => {
+    const pm = makeBuildingPlanMode({ buildMode: null });
+    const result = pm.onBeforeAgentStart(beforeAgentStart("BASE"));
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).not.toContain("PAUSE_BLOCK");
+  });
+
+  it("omits the pause block when manualBuildPause is empty", () => {
+    const pm = makeBuildingPlanMode({ buildMode: "manual", manualBuildPause: "" });
+    const result = pm.onBeforeAgentStart(beforeAgentStart("BASE"));
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).not.toContain("PAUSE_BLOCK");
+  });
+});
+
+// ── Build Mode Resolution (auto | manual) ────────────────────────────
+
+describe("PlanMode — startBuild mode resolution", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makePlanningPlanMode(overrides: Record<string, any> = {}): {
+    pm: PlanMode;
+    pi: ExtensionAPI;
+    showBuildPrompt: ReturnType<typeof vi.fn>;
+  } {
+    const { pi } = createMockPI([{ name: "read" }, { name: "edit" }, { name: "write" }]);
+    const pm = new PlanMode(pi);
+    (pm as any).phase = "planning";
+    const showBuildPrompt = vi.fn().mockResolvedValue("manual");
+    (pm as any).ui.showBuildPrompt = showBuildPrompt;
+    (pm as any).planFile.init = () => {};
+    (pm as any).planFile.getFilePath = () => null;
+    (pm as any).planFile.getTitle = () => "plan";
+    Object.assign(pm, overrides);
+    return { pm, pi, showBuildPrompt };
+  }
+
+  it("forces auto mode and skips the prompt when /planit:build auto", async () => {
+    const { pm, pi, showBuildPrompt } = makePlanningPlanMode();
+    await (pm as any).startBuild({ hasUI: false, cwd: "/tmp", ui: {} as any }, "auto");
+    expect(showBuildPrompt).not.toHaveBeenCalled();
+    expect((pm as any).buildMode).toBe("auto");
+    expect(pi.sendUserMessage).toHaveBeenCalled();
+  });
+
+  it("forces manual mode and skips the prompt when /planit:build manual", async () => {
+    const { pm, pi, showBuildPrompt } = makePlanningPlanMode();
+    await (pm as any).startBuild({ hasUI: false, cwd: "/tmp", ui: {} as any }, "manual");
+    expect(showBuildPrompt).not.toHaveBeenCalled();
+    expect((pm as any).buildMode).toBe("manual");
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the prompt when no mode arg is given", async () => {
+    const { pm, showBuildPrompt } = makePlanningPlanMode();
+    await (pm as any).startBuild({ hasUI: false, cwd: "/tmp", ui: {} as any }, "");
+    expect(showBuildPrompt).toHaveBeenCalled();
+  });
+
+  it("warns and falls back to the prompt on an unknown mode", async () => {
+    const { pm, showBuildPrompt } = makePlanningPlanMode();
+    const notify = vi.fn();
+    await (pm as any).startBuild(
+      { hasUI: true, cwd: "/tmp", ui: { notify, setStatus: vi.fn(), setWidget: vi.fn() } as any },
+      "banana",
+    );
+    expect(showBuildPrompt).toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith('Unknown build mode "banana". Expected "auto" or "manual".', "warning");
+  });
+
+  it("resets buildMode to null on exit to idle", async () => {
+    const { pm } = makePlanningPlanMode();
+    (pm as any).buildMode = "manual";
+    (pm as any).exitToIdle({ hasUI: false, cwd: "/tmp", ui: {} as any });
+    expect((pm as any).buildMode).toBeNull();
+  });
+});
