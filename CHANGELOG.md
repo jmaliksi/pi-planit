@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Manual (user-driven) build mode prompting: in manual build mode the agent receives an extra pause block in its system prompt (configurable via `manualBuildPause` in `config.json`, bundled default in `building-manual.md`), prompting it to pause and hand control back to the user after each step.
+
+### Fixed
+
+- Resumed plans are now injected into the agent's context during the planning phase. Previously `/planit:resume` loaded a plan into the UI but never surfaced its content to the LLM, so the model had no reference to the plan while discussing.
+
 ## [1.1.0] - 2026-08-16 
 
 ### Added

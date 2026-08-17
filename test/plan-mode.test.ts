@@ -829,6 +829,48 @@ describe("PlanMode — manual build prompt injection", () => {
   });
 });
 
+// ── Planning Phase: Plan Context Injection ────────────────────────────
+
+describe("PlanMode — planning phase plan injection", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makePlanningPlanMode(overrides: Record<string, any> = {}): PlanMode {
+    const { pi } = createMockPI([{ name: "read" }, { name: "edit" }, { name: "write" }]);
+    const pm = new PlanMode(pi);
+    (pm as any).phase = "planning";
+    (pm as any).planningPrompt = "PLANNING_BOILERPLATE";
+    Object.assign(pm, overrides);
+    return pm;
+  }
+
+  function beforeAgentStart(systemPrompt: string): { systemPrompt: string } {
+    return { type: "before_agent_start", prompt: "go", systemPrompt, systemPromptOptions: {} as any };
+  }
+
+  it("injects plan content into the system prompt when a plan is loaded", () => {
+    const pm = makePlanningPlanMode({
+      planFile: { hasContent: () => true, getContent: () => "# Plan\n\nstep 1\nstep 2" },
+    });
+    const result = pm.onBeforeAgentStart(beforeAgentStart("BASE"));
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("PLANNING_BOILERPLATE");
+    expect(result!.systemPrompt).toContain("step 1");
+    expect(result!.systemPrompt).toContain("[RESUMED PLAN CONTEXT]");
+  });
+
+  it("injects only the planning prompt when no plan is loaded", () => {
+    const pm = makePlanningPlanMode({
+      planFile: { hasContent: () => false, getContent: () => "" },
+    });
+    const result = pm.onBeforeAgentStart(beforeAgentStart("BASE"));
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("PLANNING_BOILERPLATE");
+    expect(result!.systemPrompt).not.toContain("[RESUMED PLAN CONTEXT]");
+  });
+});
+
 // ── Build Mode Resolution (auto | manual) ────────────────────────────
 
 describe("PlanMode — startBuild mode resolution", () => {

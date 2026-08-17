@@ -268,8 +268,11 @@ export class PlanMode {
 
   onBeforeAgentStart(event: BeforeAgentStartEvent): { systemPrompt: string } | undefined {
     if (this.phase === "planning") {
+      const planContext = this.planFile.hasContent()
+        ? `\n\n[RESUMED PLAN CONTEXT]\n\nThe following plan is loaded. Use it as reference while discussing:\n\n${this.planFile.getContent()}`
+        : "";
       return {
-        systemPrompt: `${event.systemPrompt}\n\n${this.planningPrompt}`,
+        systemPrompt: `${event.systemPrompt}\n\n${this.planningPrompt}${planContext}`,
       };
     }
 
