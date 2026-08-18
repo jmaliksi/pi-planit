@@ -10,6 +10,7 @@ import type {
   AgentEndEvent,
   ContextEvent,
 } from "@earendil-works/pi-coding-agent";
+import { createTwoFilesPatch, diffLines } from "diff";
 import type {
   PlanPhase,
   PlanModeConfig,
@@ -52,6 +53,9 @@ export class PlanMode {
   /** Plan response texts captured from the agent, recorded before overwrite (for duplication filtering). */
   private planResponseTexts: string[] = [];
 
+  /** True between /planit:write and its agent response when this is the plan's first write. */
+  private isFirstPlanWrite: boolean = false;
+
   constructor(
     private pi: ExtensionAPI,
     planFile: PlanFile = new PlanFile(),
@@ -83,6 +87,7 @@ export class PlanMode {
       blockedTools: ["edit", "write", "ast_rewrite"],
       planStorage: "global",
       avoidPlanDuplication: true,
+      previewDiff: true,
     };
 
     try {
@@ -108,6 +113,7 @@ export class PlanMode {
         planStorage: parsed.planStorage ?? defaultConfig.planStorage,
         systemPromptDir: parsed.systemPromptDir,
         avoidPlanDuplication: parsed.avoidPlanDuplication ?? defaultConfig.avoidPlanDuplication,
+        previewDiff: parsed.previewDiff ?? defaultConfig.previewDiff,
         manualBuildPause: parsed.manualBuildPause,
       };
     } catch (err) {
@@ -362,7 +368,7 @@ export class PlanMode {
 
   // ── Agent End: capture plan write if pending ────────────────────────
 
-  onAgentEnd(event: AgentEndEvent, ctx: ExtensionContext): void {
+  async onAgentEnd(event: AgentEndEvent, ctx: ExtensionContext): Promise<void> {
     if (!this.pendingPlanWrite) return;
     this.pendingPlanWrite = false;
 
@@ -395,9 +401,28 @@ export class PlanMode {
 
     this.planResponseTexts.push(lastAssistantText);
 
+    const isFirstWrite = this.isFirstPlanWrite;
+    this.isFirstPlanWrite = false;
+
     // Initialize file on first write
     if (!this.planFile.getFilePath()) {
       this.planFile.init(this.cwd, "plan");
+    }
+
+    // Preview-diff guardrail: a follow-up write that would change an existing
+    // plan must be confirmed first. Skipped on the first write, when
+    // `previewDiff` is disabled, in headless sessions (no UI to ask), or when
+    // the new response is identical to the current plan.
+    if (!isFirstWrite && this.config.previewDiff !== false && ctx.hasUI) {
+      const existing = this.planFile.getContent();
+      if (existing.trim() && existing !== lastAssistantText) {
+        const preview = this.buildDiffSummary(existing, lastAssistantText);
+        const approved = await ctx.ui.confirm("Update plan file?", preview);
+        if (!approved) {
+          this.ui.notify("Plan write cancelled — existing plan preserved.", "info", ctx.hasUI, ctx.ui);
+          return;
+        }
+      }
     }
 
     this.planFile.write(lastAssistantText);
@@ -415,6 +440,33 @@ export class PlanMode {
       // The agent is at a natural pause — user reviews/edits then triggers next cycle.
       this.ui.notify("Plan updated — continue when ready.", "info", ctx.hasUI, ctx.ui);
     }
+  }
+
+  // ── Diff Preview ───────────────────────────────────────────────────
+
+  /**
+   * Build a compact unified diff summary (added/removed counts + a capped
+   * preview) for the preview-diff guardrail. Uses the `diff` package (jsdiff).
+   */
+  private buildDiffSummary(oldContent: string, newContent: string): string {
+    const hunks = diffLines(oldContent, newContent).filter(
+      (part) => part.added || part.removed,
+    );
+    const added = hunks
+      .filter((part) => part.added)
+      .reduce((n, part) => n + (part.count ?? 0), 0);
+    const removed = hunks
+      .filter((part) => part.removed)
+      .reduce((n, part) => n + (part.count ?? 0), 0);
+
+    const lines = createTwoFilesPatch("plan", "plan", oldContent, newContent)
+      .split("\n")
+      .slice(2) // drop the --- / +++ file headers
+      .filter(Boolean);
+
+    const preview = lines.slice(0, 30).join("\n");
+    const truncated = lines.length > 30 ? `\n… and ${lines.length - 30} more lines` : "";
+    return `${added} line(s) added, ${removed} line(s) removed\n\n${preview}${truncated}`;
   }
 
   // ── State Persistence ──────────────────────────────────────────────
@@ -522,15 +574,19 @@ export class PlanMode {
     }
 
     // Initialize file path if this is the first write
-    if (!this.planFile.getFilePath()) {
+    const isFirstWrite = !this.planFile.getFilePath();
+    if (isFirstWrite) {
       this.planFile.init(ctx.cwd, title ?? "plan");
     }
+    this.isFirstPlanWrite = isFirstWrite;
 
     this.pendingPlanWrite = true;
 
-    const existingContent = this.planFile.hasContent()
-      ? `\n\nExisting plan file content to merge with:\n\`\`\`\n${this.planFile.getContent()}\n\`\`\``
-      : "";
+    // First writes have no prior content to merge — only follow-up writes get
+    // the existing-content block (the writing prompt branches on its presence).
+    const existingContent = isFirstWrite
+      ? ""
+      : `\n\nExisting plan file content to merge with:\n\`\`\`\n${this.planFile.getContent()}\n\`\`\``;
 
     const basePrompt = this.writingPrompt;
     const extraInstructions = instructions ? `\n\nAdditional instructions: ${instructions}` : "";
@@ -648,7 +704,7 @@ export class PlanMode {
         `A plan file exists at ${filePath}. Delete it?`,
       );
       if (shouldDelete) {
-        fs.unlinkSync(filePath);
+        PlanFile.deleteFile(filePath);
         this.planFile = new PlanFile();
         this.ui.notify("Plan file deleted.", "info", ctx.hasUI, ctx.ui);
       }
@@ -731,7 +787,7 @@ export class PlanMode {
 
     if (!ctx.hasUI) {
       const latest = plans[0];
-      fs.unlinkSync(latest.filePath);
+      PlanFile.deleteFile(latest.filePath);
       this.ui.notify(`Plan deleted: ${latest.filename}`, "info", ctx.hasUI, ctx.ui);
       return;
     }
@@ -757,7 +813,7 @@ export class PlanMode {
       return;
     }
 
-    fs.unlinkSync(selectedPlan.filePath);
+    PlanFile.deleteFile(selectedPlan.filePath);
     this.ui.notify(`Plan deleted: ${selectedPlan.filename}`, "info", ctx.hasUI, ctx.ui);
   }
 
@@ -822,10 +878,9 @@ export class PlanMode {
         // Read back — user may have saved or not
         const newContent = fs.readFileSync(tmpFile, "utf-8").replace(/\n$/, "");
 
-        // Write back to the plan file if content changed
+        // Write back to the plan file if content changed (versioned like all plan writes)
         if (newContent !== content) {
-          fs.writeFileSync(filePath, newContent, "utf-8");
-          this.planFile.content = newContent;
+          this.planFile.write(newContent);
           this.ui.notify(
             `Plan updated (${this.planFile.getFilePath()})`,
             "info",
@@ -952,6 +1007,18 @@ export class PlanMode {
       description: "Open the current plan in your external editor ($VISUAL/$EDITOR)",
       handler: async (_args: string, ctx: ExtensionContext) => {
         await this.reviewPlan(ctx);
+      },
+    });
+
+    pi.registerCommand("planit:undo", {
+      description: "Restore the previous version of the plan file from its latest backup",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        if (this.planFile.restoreLatestBackup()) {
+          this.ui.notify("Plan restored from latest backup.", "info", ctx.hasUI, ctx.ui);
+        } else {
+          this.ui.notify("No backup found for the current plan.", "info", ctx.hasUI, ctx.ui);
+        }
+        this.persistState(ctx);
       },
     });
 

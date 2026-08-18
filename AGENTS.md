@@ -19,14 +19,14 @@ Extension for pi.dev providing chat-first plan mode — safe codebase exploratio
 |---|---|
 | `src/index.ts` | Extension entry point — registers PlanMode instance |
 | `src/plan-mode.ts` | Core state machine: enter/exit, tool gating, system prompt injection, session lifecycle, `/planit review` |
-| `src/plan-file.ts` | Plan file I/O, storage paths, `listPlans()` |
+| `src/plan-file.ts` | Plan file I/O, storage paths, versioned writes (retained timestamped backups), `listPlans()`/`listBackups()`/`restoreLatestBackup()`/`deleteFile()` |
 | `src/bash-filter.ts` | Whitelist/denylist for bash commands in plan mode |
 | `src/ui.ts` | Status bar, plan widget, build prompt dialog |
 | `src/types.ts` | Shared type definitions (PlanPhase, PlanModeConfig) |
 | `src/path-utils.ts` | Path resolution helpers |
 
 ## Commands (user-facing)
-`/planit` toggle · `/planit write [title]` · `/planit build` · `/planit replan` · `/planit exit` · `/planit resume` · `/planit delete` · `/planit discard` · `/planit review`
+`/planit` toggle · `/planit write [title]` · `/planit build` · `/planit replan` · `/planit exit` · `/planit resume` · `/planit delete` · `/planit discard` · `/planit review` · `/planit undo`
 
 ## Build & Test
 ```bash

@@ -46,6 +46,15 @@ describe("BashFilter", () => {
       expect(filter.isSafe("id")).toBe(true);
     });
 
+    it("allows timekeeping commands", () => {
+      expect(filter.isSafe("date")).toBe(true);
+      expect(filter.isSafe("date +%s")).toBe(true);
+      expect(filter.isSafe("time")).toBe(true);
+      expect(filter.isSafe("cal")).toBe(true);
+      expect(filter.isSafe("uptime")).toBe(true);
+      expect(filter.isSafe("timedatectl")).toBe(true);
+    });
+
     it("allows read-only package commands", () => {
       expect(filter.isSafe("npm list")).toBe(true);
       expect(filter.isSafe("npm info express")).toBe(true);

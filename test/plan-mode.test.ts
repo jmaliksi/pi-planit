@@ -935,3 +935,148 @@ describe("PlanMode — startBuild mode resolution", () => {
     expect((pm as any).buildMode).toBeNull();
   });
 });
+
+// ── Plan Write Guardrails: preview diff + versioned writes ──────────
+
+describe("PlanMode — plan write guardrails", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-guardrail-test-" + Date.now();
+    process.env.HOME = tmpHome;
+    setResolvedPlansDir(path.join(tmpHome, ".pi", "agent", "plans"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  function agentEventWithText(text: string): Record<string, any> {
+    return { messages: [{ role: "assistant", content: [{ type: "text", text }] }] };
+  }
+
+  function makePlanModeWithExistingPlan(): { pm: PlanMode; pf: PlanFile; ctx: any } {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    pf.write("# Plan\n\n### Step 1\nDo the thing.");
+    const pm = new PlanMode(pi, pf);
+    (pm as any).phase = "planning";
+    (pm as any).cwd = "/tmp/test";
+    (pm as any).pendingPlanWrite = true;
+    const notify = vi.fn();
+    const confirm = vi.fn().mockResolvedValue(false);
+    const ctx = {
+      hasUI: true,
+      cwd: "/tmp/test",
+      ui: { notify, confirm, setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn() },
+    };
+    return { pm, pf, ctx };
+  }
+
+  it("shows a diff preview and cancels the write when the user declines", async () => {
+    const { pm, pf, ctx } = makePlanModeWithExistingPlan();
+    const newPlan = "# Plan\n\n### Step 1\nDo the thing.\n#### Update (2026-01-01 12:00)\n- extra detail";
+
+    await (pm as any).onAgentEnd(agentEventWithText(newPlan), ctx);
+
+    expect(ctx.ui.confirm).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.confirm).toHaveBeenCalledWith(
+      "Update plan file?",
+      expect.stringContaining("line(s) added"),
+    );
+    expect(pf.getContent()).toBe("# Plan\n\n### Step 1\nDo the thing.");
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Plan write cancelled — existing plan preserved.", "info");
+  });
+
+  it("applies the write when the user approves the preview", async () => {
+    const { pm, pf, ctx } = makePlanModeWithExistingPlan();
+    ctx.ui.confirm.mockResolvedValue(true);
+    const newPlan = "# Plan\n\n### Step 1\nDo the thing.\n#### Update (2026-01-01 12:00)\n- extra detail";
+
+    await (pm as any).onAgentEnd(agentEventWithText(newPlan), ctx);
+
+    expect(ctx.ui.confirm).toHaveBeenCalledTimes(1);
+    expect(pf.getContent()).toBe(newPlan);
+  });
+
+  it("skips the preview when previewDiff is disabled", async () => {
+    const { pm, pf, ctx } = makePlanModeWithExistingPlan();
+    (pm as any).config.previewDiff = false;
+    const newPlan = "# Plan\n\n### Step 1\nDo the thing.\n#### Update (2026-01-01 12:00)\n- extra detail";
+
+    await (pm as any).onAgentEnd(agentEventWithText(newPlan), ctx);
+
+    expect(ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(pf.getContent()).toBe(newPlan);
+  });
+
+  it("skips the preview in headless sessions and applies the write", async () => {
+    const { pm, pf, ctx } = makePlanModeWithExistingPlan();
+    ctx.hasUI = false;
+    const newPlan = "# Plan\n\n### Step 1\nDo the thing.\nmore";
+
+    await (pm as any).onAgentEnd(agentEventWithText(newPlan), { ...ctx, ui: {} });
+
+    expect(ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(pf.getContent()).toBe(newPlan);
+  });
+
+  it("skips the preview on the first write", async () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pf = new PlanFile();
+    const pm = new PlanMode(pi, pf);
+    (pm as any).phase = "planning";
+    (pm as any).cwd = "/tmp/test";
+    (pm as any).pendingPlanWrite = true;
+    (pm as any).isFirstPlanWrite = true;
+    const confirm = vi.fn().mockResolvedValue(false);
+    const notify = vi.fn();
+    const ctx = {
+      hasUI: true,
+      cwd: "/tmp/test",
+      ui: { notify, confirm, setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn() },
+    };
+
+    const plan = "# Plan\n\n### Step 1\nFirst draft.";
+    await (pm as any).onAgentEnd(agentEventWithText(plan), ctx);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(pf.getContent()).toBe(plan);
+    expect(pf.getFilePath()).toBeTruthy();
+  });
+
+  it("registers planit:undo and restores the latest backup", async () => {
+    const { pi } = createMockPI([{ name: "read" }]);
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    pf.write("# Plan\n\nv1");
+    pf.write("# Plan\n\nv2");
+    const pm = new PlanMode(pi, pf);
+    const notify = vi.fn();
+    const ctx = {
+      hasUI: true,
+      cwd: "/tmp/test",
+      ui: { notify, setStatus: vi.fn(), setWidget: vi.fn(), select: vi.fn(), confirm: vi.fn() },
+    };
+
+    (pm as any).register(pi);
+
+    const cmdCalls = (pi.registerCommand as ReturnType<typeof vi.fn>).mock.calls;
+    const undoCall = cmdCalls.find((c: any[]) => c[0] === "planit:undo");
+    expect(undoCall).toBeDefined();
+    await undoCall![1].handler("", ctx);
+
+    expect(pf.getContent()).toBe("# Plan\n\nv1");
+    expect(notify).toHaveBeenCalledWith("Plan restored from latest backup.", "info");
+  });
+});

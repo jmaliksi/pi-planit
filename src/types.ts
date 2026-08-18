@@ -11,6 +11,8 @@ export interface PlanModeConfig {
   systemPromptDir?: string;
   /** When building, drop the /planit:write exchange from LLM context (the plan is injected via the system prompt). Only active when a plan file has content. */
   avoidPlanDuplication?: boolean;
+  /** When enabled (default), follow-up plan writes show a diff preview and require confirmation before overwriting the plan file. Skipped on first writes and in headless sessions (no UI). */
+  previewDiff?: boolean;
   /** Custom instruction injected into the system prompt during manual/user-driven build. Overrides the bundled default. Falls back to building-manual.md in systemPromptDir when unset. */
   manualBuildPause?: string;
 }

@@ -166,6 +166,30 @@ describe("PlanMode — plan deletion", () => {
       expect(notify).toHaveBeenCalledWith("Deletion cancelled.", "info");
     });
 
+    it("removes backups when deleting a plan", async () => {
+      const { pi } = createMockPI();
+      const cwd = "/tmp/test-project";
+      const planPath = createPlanFile(cwd, "test-plan-2026-01-01T00-00-00.md", "# Test Plan\n");
+      const backupPath = `${planPath}.bak-2026-01-01T00-00-00`;
+      fs.writeFileSync(backupPath, "# Test Plan\n");
+
+      const pm = new PlanMode(pi);
+      const ctx = pi.getContext()!;
+      (ctx as any).hasUI = true;
+      ctx.ui = {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        select: vi.fn().mockImplementation((_title: string, opts: string[]) => opts[0]),
+        confirm: vi.fn().mockResolvedValue(true),
+      };
+
+      await (pm as any).deletePlan(ctx);
+
+      expect(fs.existsSync(planPath)).toBe(false);
+      expect(fs.existsSync(backupPath)).toBe(false);
+    });
+
     it("deletes the latest plan in non-UI mode", async () => {
       const { pi } = createMockPI();
       const cwd = "/tmp/test-project";

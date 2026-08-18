@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Versioned plan writes: every overwrite archives the previous content to a timestamped `<plan>.md.bak-<ts>` sibling, and new `/planit:undo` restores the latest backup (restore is itself reversible)
+- Preview-diff guardrail: follow-up `/planit:write` runs show a diff preview and require confirmation before overwriting the plan (configurable via `previewDiff` in `config.json`, default on; skipped on first writes and in headless sessions)
+- Read-only timekeeping bash commands (`date`, `time`, `cal`, `uptime`, `timedatectl`) are now allowed in plan mode
+- Plan mode now explicitly forbids interpreter commands (node, python, etc.): the agent is directed to use the built-in read-only tools, and may only ask the user to run a command when certain the built-in tools cannot retrieve the information
+
+### Changed
+
+- Follow-up `/planit:write` prompts now enforce an append-only contract: existing content must be reproduced verbatim and new information is added as timestamped addenda (`#### Update (YYYY-MM-DD HH:MM)`) under the relevant step, as a new sequential step (fractional numbers like `2.5` when inserted between steps), or in a trailing `## Notes` section
+- Plan files are only created on disk once the first write lands (no empty stub file is materialized at `/planit:write` time)
+
 ## [1.2.0] - 2026-08-16
 
 ### Added

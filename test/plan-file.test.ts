@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
-import { PlanFile } from "../src/plan-file";
+import * as path from "node:path";
+import { PlanFile, setResolvedPlansDir } from "../src/plan-file";
 
 describe("derivePlanName", () => {
   it("produces a slug from a task description", () => {
@@ -155,5 +156,145 @@ describe("PlanFile", () => {
       expect(pf2.getContent()).toBe(newContent);
       expect(pf2.getTitle()).toBe("Loaded Plan");
     });
+  });
+});
+
+// ── Versioned writes ─────────────────────────────────────────────────
+
+describe("PlanFile — versioned writes", () => {
+  let backupHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    backupHome = process.env.HOME;
+    tmpHome = "/tmp/planit-version-test-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+    process.env.HOME = tmpHome;
+    setResolvedPlansDir(path.join(tmpHome, ".pi", "agent", "plans"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (backupHome !== undefined) {
+      process.env.HOME = backupHome;
+    } else {
+      delete process.env.HOME;
+    }
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("creates a timestamped backup with the prior content before overwriting", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    const filePath = pf.getFilePath();
+    pf.write("# Plan\n\n### Step 1\nv1");
+    pf.write("# Plan\n\n### Step 1\nv1\n### Step 2\nv2");
+
+    const backups = PlanFile.listBackups(filePath);
+    expect(backups.length).toBe(1);
+    expect(fs.readFileSync(backups[0], "utf-8")).toBe("# Plan\n\n### Step 1\nv1");
+    expect(path.basename(backups[0])).toMatch(/\.md\.bak-\d+$/);
+    expect(pf.getContent()).toContain("### Step 2");
+  });
+
+  it("does not create a backup when content is unchanged", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    const filePath = pf.getFilePath();
+    pf.write("# Plan\n\ncontent");
+    pf.write("# Plan\n\ncontent");
+    expect(PlanFile.listBackups(filePath)).toEqual([]);
+  });
+
+  it("does not create a backup on the first write (no file on disk yet)", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    const filePath = pf.getFilePath();
+    pf.write("# Plan\n\nfirst content");
+    expect(PlanFile.listBackups(filePath)).toEqual([]);
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("excludes backups from listPlans", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    pf.write("# Plan\n\nv1");
+    pf.write("# Plan\n\nv2");
+    const plans = PlanFile.listPlans("/tmp/test");
+    expect(plans.length).toBe(1);
+    expect(plans[0].filename.endsWith(".md")).toBe(true);
+  });
+
+  it("restoreLatestBackup restores the previous version and is itself reversible", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    pf.write("# Plan\n\nv1");
+    pf.write("# Plan\n\nv2");
+
+    expect(pf.restoreLatestBackup()).toBe(true);
+    expect(pf.getContent()).toBe("# Plan\n\nv1");
+    expect(fs.readFileSync(pf.getFilePath(), "utf-8")).toBe("# Plan\n\nv1");
+
+    // Undoing the undo restores v2
+    expect(pf.restoreLatestBackup()).toBe(true);
+    expect(pf.getContent()).toBe("# Plan\n\nv2");
+    expect(fs.readFileSync(pf.getFilePath(), "utf-8")).toBe("# Plan\n\nv2");
+  });
+
+  it("returns false from restoreLatestBackup when no backup exists", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    pf.write("# Plan\n\nonly version");
+    expect(pf.restoreLatestBackup()).toBe(false);
+  });
+
+  it("prunes backups beyond the retention limit, keeping the newest", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    const filePath = pf.getFilePath();
+    for (let i = 1; i <= 12; i++) {
+      pf.write(`# Plan\n\nv${i}`);
+    }
+
+    const backups = PlanFile.listBackups(filePath);
+    expect(backups.length).toBe(10);
+    // Newest kept: v11 was archived by the v12 write
+    expect(fs.readFileSync(backups[0], "utf-8")).toBe("# Plan\n\nv11");
+    // Oldest pruned: no backup contains v1
+    const contents = backups.map((b) => fs.readFileSync(b, "utf-8"));
+    expect(contents).not.toContain("# Plan\n\nv1");
+    // Current file holds the latest version
+    expect(pf.getContent()).toBe("# Plan\n\nv12");
+  });
+
+  it("keeps distinct backups for rapid same-second writes", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    const filePath = pf.getFilePath();
+    for (let i = 1; i <= 5; i++) {
+      pf.write(`# Plan\n\nv${i}`);
+    }
+
+    const backups = PlanFile.listBackups(filePath);
+    expect(backups.length).toBe(4);
+    expect(new Set(backups).size).toBe(4);
+  });
+
+  it("deleteFile removes the plan file and all of its backups", () => {
+    const pf = new PlanFile();
+    pf.init("/tmp/test", "test");
+    const filePath = pf.getFilePath();
+    pf.write("# Plan\n\nv1");
+    pf.write("# Plan\n\nv2");
+
+    expect(fs.existsSync(filePath)).toBe(true);
+    expect(PlanFile.listBackups(filePath).length).toBe(1);
+
+    expect(PlanFile.deleteFile(filePath)).toBe(true);
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(PlanFile.listBackups(filePath)).toEqual([]);
+
+    // Deleting again is a no-op
+    expect(PlanFile.deleteFile(filePath)).toBe(false);
   });
 });

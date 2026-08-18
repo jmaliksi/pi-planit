@@ -43,6 +43,13 @@ export class BashFilter {
     /^\s*whoami(\s|$)/,
     /^\s*id(\s|$)/,
 
+    // Timekeeping (read-only)
+    /^\s*date(\s|$)/,
+    /^\s*time(\s|$)/,
+    /^\s*cal(\s|$)/,
+    /^\s*uptime(\s|$)/,
+    /^\s*timedatectl(\s|$)/,
+
     // Package info (read-only)
     /^\s*npm\s+(list|info|show|view|help)\b/,
     /^\s*yarn\s+(list|info|help)\b/,

@@ -4,6 +4,18 @@ Output ONLY the plan as a markdown document — no preamble, no explanation, jus
 
 DO NOT look for the plan file on disk; do NOT attempt to `write` or `edit` anything. The markdown with which you respond to this prompt will be automatically saved to disk via a separate process.
 
+### Follow-Up Writes (only when "Existing plan file content" is present above)
+
+This is a follow-up write — the plan file already exists and must NOT be rewritten:
+
+- Reproduce the existing content EXACTLY as given, verbatim — every heading, step, and line. Never delete, reorder, or reword existing material, and never replace it with a "merged" summary.
+- New information about a step that is already covered → append an addendum directly underneath that step, leaving the existing step content untouched:
+    #### Update (YYYY-MM-DD HH:MM)
+    - <concrete new decision, constraint, or context>
+- New information that is a separate work item → add a new sequential step at the end of the file. If it belongs between two existing steps, number it as the average of the surrounding step numbers (e.g. between Step 2 and Step 3 → `### Step 2.5`). Never renumber existing steps.
+- Loose notes that don't fit a step → append a final `## Notes (YYYY-MM-DD HH:MM)` section at the very end.
+- Use the current date and time for every addendum timestamp.
+
 ### Self-Contained Requirement
 The plan may later be resumed or reused in a fresh session where the original exploration outputs (file reads, search results, command output) are not present. Therefore:
 - Be explicit and concrete: include exact file paths, symbol names, function signatures, and line-level anchors where decisions depend on them.
